@@ -87,15 +87,17 @@ pub const Window = struct {
 
         // Cursors: stub — draw a fixed cursor rect until we have pixel-accurate
         // layout from measureText.
+        const normal_color = draw.Color.rgb(0, 196, 255); // iA Writer blue #00C4FF
+        const insert_color = draw.Color.rgb(223, 41, 53); // #df2935
         if (self.mode == .insert) {
             try dl.drawCursor(
                 .{ .x = gutter_width, .y = -self.scroll_y, .w = 2, .h = line_height },
-                draw.Color.rgb(220, 80, 80),
+                insert_color,
             );
         } else {
             try dl.drawCursor(
-                .{ .x = gutter_width, .y = -self.scroll_y, .w = 8, .h = line_height },
-                draw.Color.rgb(80, 140, 220),
+                .{ .x = gutter_width, .y = -self.scroll_y, .w = 2, .h = line_height },
+                normal_color,
             );
         }
     }

@@ -33,7 +33,7 @@ const imports = {
 
     js_draw_text(x, y, ptr, len, color, size) {
       ctx.fillStyle = unpackColor(color);
-      ctx.font = `${size}px monospace`;
+      ctx.font = `${size}px 'IBM Plex Mono', monospace`;
       ctx.fillText(wasmStr(ptr, len), x, y);
     },
 
@@ -54,7 +54,7 @@ const imports = {
     },
 
     js_measure_text(ptr, len, size) {
-      ctx.font = `${size}px monospace`;
+      ctx.font = `${size}px 'IBM Plex Mono', monospace`;
       return ctx.measureText(wasmStr(ptr, len)).width;
     },
   },
@@ -91,6 +91,7 @@ function modsFromEvent(e) {
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 
 async function main() {
+  await document.fonts.ready;
   const resp = await fetch("editor.wasm");
   const { instance } = await WebAssembly.instantiateStreaming(resp, imports);
   const wasm = instance;
