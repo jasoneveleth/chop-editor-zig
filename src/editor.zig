@@ -362,6 +362,21 @@ pub const Editor = struct {
 
     // ── Input ─────────────────────────────────────────────────────────────────
 
+    /// Insert text for each cursor independently.
+    /// Uses strict `> pos` adjustment so overlapping cursors separate rather than
+    /// all being bumped to the same post-insertion position.
+    fn insertAtCursors(self: *Editor, win: *Window, cs: *CursorSet, text: []const u8) void {
+        const buf_obj = self.getBuffer(win.buffer_id) orelse return;
+        var idx = cs.len;
+        while (idx > 0) {
+            idx -= 1;
+            const pos = cs.buf[idx].head;
+            buf_obj.insert(pos, text) catch continue;
+            cs.buf[idx].head = pos + (idx+1) * text.len;
+            cs.buf[idx].offset = 0;
+        }
+    }
+
     const Dir = enum { left, right, up, down };
 
     fn move(self: *Editor, win: *Window, cs: *CursorSet, dir: Dir) void {
@@ -427,20 +442,14 @@ pub const Editor = struct {
                 },
                 .enter => {
                     win.preferred_col = null;
-                    var it = cs.reverseIter();
-                    while (it.next()) |cursor| {
-                        self.bufferInsert(win.buffer_id, cursor.head, "\n") catch return;
-                    }
+                    self.insertAtCursors(win, cs, "\n");
                 },
                 else => if (key.isPrintable()) {
                     win.preferred_col = null;
                     var encoded: [4]u8 = undefined;
                     const cp: u21 = @intCast(@intFromEnum(key));
                     const byte_len = std.unicode.utf8Encode(cp, &encoded) catch return;
-                    var it = cs.reverseIter();
-                    while (it.next()) |cursor| {
-                        self.bufferInsert(win.buffer_id, cursor.head, encoded[0..byte_len]) catch return;
-                    }
+                    self.insertAtCursors(win, cs, encoded[0..byte_len]);
                 },
             },
             .command => switch (key) {
