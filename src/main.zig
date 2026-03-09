@@ -22,9 +22,9 @@ export fn render(time_ms: f64) void {
     platform.present(&dl);
 }
 
-export fn on_key_down(raw: u32, mods: u32) void {
+export fn on_key_down(time_ms: f64, raw: u32, mods: u32) void {
     if (!initialized) return;
-    editor.onKeyDown(@enumFromInt(raw), mods);
+    editor.onKeyDown(time_ms, @enumFromInt(raw), mods);
 }
 
 export fn on_key_up(raw: u32, mods: u32) void {
@@ -37,9 +37,9 @@ export fn on_mouse(x: f32, y: f32, button: u8, kind: u8) void {
     editor.onMouse(x, y, button, kind);
 }
 
-export fn on_scroll(dx: f32, dy: f32) void {
+export fn on_scroll(time_ms: f64, dx: f32, dy: f32) void {
     if (!initialized) return;
-    editor.onScroll(dx, dy);
+    editor.onScroll(time_ms, dx, dy);
 }
 
 export fn on_resize(width: u32, height: u32) void {
