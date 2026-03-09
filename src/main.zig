@@ -14,11 +14,11 @@ export fn init(width: u32, height: u32) void {
     initialized = true;
 }
 
-export fn render() void {
+export fn render(time_ms: f64) void {
     if (!initialized) return;
     var dl = draw.DrawList.init(allocator);
     defer dl.deinit();
-    editor.buildDrawList(&dl) catch return;
+    editor.buildDrawList(&dl, time_ms) catch return;
     platform.present(&dl);
 }
 

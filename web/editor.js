@@ -160,8 +160,8 @@ async function main() {
   }, { passive: false });
 
   // Render loop
-  function frame() {
-    wasm.exports.render();
+  function frame(ts) {
+    wasm.exports.render(ts);
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);

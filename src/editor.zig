@@ -24,6 +24,8 @@ pub const Editor = struct {
     focused_window: WindowId,
     palette: Palette,
     palette_open: bool,
+    time_ms: f64 = 0,
+    last_input_ms: f64 = 0,
 
     pub fn init(allocator: std.mem.Allocator, width: u32, height: u32) !Editor {
         var editor = Editor{
@@ -231,13 +233,16 @@ pub const Editor = struct {
 
     // ── Rendering ─────────────────────────────────────────────────────────────
 
-    pub fn buildDrawList(self: *Editor, dl: *draw.DrawList) !void {
+    pub fn buildDrawList(self: *Editor, dl: *draw.DrawList, time_ms: f64) !void {
+        self.time_ms = time_ms;
+        const cursor_visible = @mod(time_ms - self.last_input_ms, 1000) < 667;
+
         const win = self.getWindow(self.focused_window) orelse return;
         const buf = self.getBuffer(win.buffer_id) orelse return;
         const cs = self.getCursorSet(win.cursor_set_id) orelse return;
 
         const highlights: []const Match = if (self.palette_open) self.palette.matches.items else &.{};
-        try win.buildDrawList(dl, buf, cs, highlights);
+        try win.buildDrawList(dl, buf, cs, highlights, cursor_visible);
 
         if (self.palette_open) try self.drawPalette(dl, win);
     }
@@ -294,6 +299,7 @@ pub const Editor = struct {
     // ── Input ─────────────────────────────────────────────────────────────────
 
     pub fn onKeyDown(self: *Editor, key: Key, mods: u32) void {
+        self.last_input_ms = self.time_ms;
         if (self.palette_open) {
             self.handlePaletteKey(key, mods);
             return;
@@ -352,6 +358,7 @@ pub const Editor = struct {
     }
 
     pub fn onScroll(self: *Editor, dx: f32, dy: f32) void {
+        self.last_input_ms = self.time_ms;
         if (self.getWindow(self.focused_window)) |win| win.onScroll(dx, dy);
     }
 

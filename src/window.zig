@@ -44,7 +44,7 @@ pub const Window = struct {
 
     // No deinit — Window owns no heap memory.
 
-    pub fn buildDrawList(self: *Window, dl: *draw.DrawList, buf: *const Buffer, cs: *const CursorSet, highlights: []const Match) !void {
+    pub fn buildDrawList(self: *Window, dl: *draw.DrawList, buf: *const Buffer, cs: *const CursorSet, highlights: []const Match, cursor_visible: bool) !void {
         // Background
         try dl.fillRect(
             .{ .x = 0, .y = 0, .w = self.width, .h = self.height },
@@ -111,7 +111,7 @@ pub const Window = struct {
                                 content[cl_start..cursor.head],
                                 self.font_size,
                             );
-                            try dl.fillRect(
+                            if (cursor_visible) try dl.fillRect(
                                 .{ .x = cx - 1, .y = cl_y, .w = 2, .h = line_height },
                                 cursor_color,
                             );
