@@ -17,6 +17,27 @@ const FILLER_TEXT = "Out of the night that covers me,\n      Black as the pit fr
 
 // ── Cursor movement helpers ────────────────────────────────────────────────
 
+/// Convert a click position to a buffer byte offset.
+fn posFromPoint(win: *const Window, content: []const u8, click_x: f32, click_y: f32) usize {
+    const line_height = win.font_size * 1.4;
+    const gutter_width: f32 = 8;
+    const line_idx: usize = @intFromFloat(@floor(@max(0.0, (click_y + win.scroll_y) / line_height)));
+    var current_line: usize = 0;
+    var line_start: usize = 0;
+    var i: usize = 0;
+    while (i <= content.len) : (i += 1) {
+        const at_end = i == content.len;
+        const at_nl = !at_end and content[i] == '\n';
+        if (at_nl or at_end) {
+            if (current_line == line_idx)
+                return closestPosToX(content, line_start, i, click_x - gutter_width, win.font_size);
+            line_start = i + 1;
+            current_line += 1;
+        }
+    }
+    return content.len;
+}
+
 fn cursorLeft(content: []const u8, head: usize) usize {
     return grapheme.prevGrapheme(content, head);
 }
@@ -433,8 +454,16 @@ pub const Editor = struct {
         _ = self; _ = key; _ = mods;
     }
 
-    pub fn onMouse(self: *Editor, x: f32, y: f32, button: u8, kind: u8) void {
-        _ = self; _ = x; _ = y; _ = button; _ = kind;
+    pub fn onMouse(self: *Editor, x: f32, y: f32, button: u8, kind: u8, mods: u32) void {
+        if (kind != 1 or button != 0) return; // left mousedown only
+        const win = self.getWindow(self.focused_window) orelse return;
+        const buf = self.getBuffer(win.buffer_id) orelse return;
+        const cs = self.getCursorSet(win.cursor_set_id) orelse return;
+        const pos = posFromPoint(win, buf.bytes(), x, y);
+        win.preferred_col = null;
+        const alt = (mods & @import("key.zig").MOD_ALT) != 0;
+        if (!alt) cs.clear();
+        cs.insert(Cursor.init(pos)) catch {};
     }
 
     pub fn onScroll(self: *Editor, time_ms: f64, dx: f32, dy: f32) void {

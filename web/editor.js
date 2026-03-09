@@ -149,9 +149,9 @@ async function main() {
   });
 
   // Mouse
-  canvas.addEventListener("mousemove",  (e) => wasm.exports.on_mouse(e.offsetX, e.offsetY, 0, 0));
-  canvas.addEventListener("mousedown",  (e) => wasm.exports.on_mouse(e.offsetX, e.offsetY, e.button, 1));
-  canvas.addEventListener("mouseup",    (e) => wasm.exports.on_mouse(e.offsetX, e.offsetY, e.button, 2));
+  canvas.addEventListener("mousemove",  (e) => wasm.exports.on_mouse(e.offsetX, e.offsetY, 0, 0, 0));
+  canvas.addEventListener("mousedown",  (e) => wasm.exports.on_mouse(e.offsetX, e.offsetY, e.button, 1, modsFromEvent(e)));
+  canvas.addEventListener("mouseup",    (e) => wasm.exports.on_mouse(e.offsetX, e.offsetY, e.button, 2, 0));
 
   // Scroll
   window.addEventListener("wheel", (e) => {

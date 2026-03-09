@@ -32,9 +32,9 @@ export fn on_key_up(raw: u32, mods: u32) void {
     editor.onKeyUp(@enumFromInt(raw), mods);
 }
 
-export fn on_mouse(x: f32, y: f32, button: u8, kind: u8) void {
+export fn on_mouse(x: f32, y: f32, button: u8, kind: u8, mods: u32) void {
     if (!initialized) return;
-    editor.onMouse(x, y, button, kind);
+    editor.onMouse(x, y, button, kind, mods);
 }
 
 export fn on_scroll(time_ms: f64, dx: f32, dy: f32) void {
