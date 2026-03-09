@@ -97,7 +97,7 @@ pub const Window = struct {
                                 self.font_size,
                             );
                             try dl.drawCursor(
-                                .{ .x = cx, .y = cl_y, .w = 2, .h = line_height },
+                                .{ .x = cx - 1, .y = cl_y, .w = 2, .h = line_height },
                                 cursor_color,
                             );
                         }
