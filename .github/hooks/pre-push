@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# .git/hooks/pre-push
+# Runs only when pushing to main: builds WASM, assembles dist, force-pushes to gh-pages
+
+set -euo pipefail
+
+REMOTE="$1"
+BRANCH=""
+
+# Parse the refs being pushed to find if main is among them
+while read local_ref local_sha remote_ref remote_sha; do
+  if [[ "$remote_ref" == "refs/heads/main" ]]; then
+    BRANCH="main"
+  fi
+done
+
+# Only act on pushes to main
+[[ "$BRANCH" == "main" ]] || exit 0
+
+echo "→ Pre-push: deploying to gh-pages..."
+
+# 1. Build WASM
+echo "→ Building WASM..."
+zig build
+
+# 2. Assemble dist
+echo "→ Assembling dist..."
+mkdir -p dist
+cp web/index.html dist/
+cp web/editor.js dist/
+cp web/editor.wasm dist/
+
+# 3. Deploy to gh-pages via a detached worktree push
+echo "→ Deploying to gh-pages..."
+DEPLOY_DIR=$(mktemp -d)
+cp -r dist/. "$DEPLOY_DIR"
+
+git -C "$DEPLOY_DIR" init -q
+git -C "$DEPLOY_DIR" checkout -q --orphan gh-pages
+git -C "$DEPLOY_DIR" add -A
+git -C "$DEPLOY_DIR" -c user.email="deploy@local" -c user.name="pre-push hook" \
+  commit -q -m "Deploy $(git rev-parse --short HEAD)"
+git -C "$DEPLOY_DIR" remote add origin "$(git remote get-url "$REMOTE")"
+git -C "$DEPLOY_DIR" push --force -q origin gh-pages
+
+rm -rf "$DEPLOY_DIR"
+
+echo "✓ Deployed to gh-pages"
