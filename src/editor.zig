@@ -12,7 +12,7 @@ const Palette = @import("palette.zig").Palette;
 const Match = @import("palette.zig").Match;
 const platform = @import("platform/web.zig");
 
-const ALICE = "Alice was beginning to get very tired of sitting by her sister on the bank, and of having nothing to do: once or twice she had peeped into the book her sister was reading, but it had no pictures or conversations in it, \"and what is the use of a book,\" thought Alice \"without pictures or conversations?\"\n\nSo she was considering in her own mind (as well as she could, for the hot day made her feel very sleepy and stupid), whether the pleasure of making a daisy-chain would be worth the trouble of getting up and picking the daisies, when suddenly a White Rabbit with pink eyes ran close by her.\n";
+const FILLER_TEXT = "Out of the night that covers me,\n      Black as the pit from pole to pole,\nI thank whatever gods may be\n      For my unconquerable soul.\n\nIn the fell clutch of circumstance\n      I have not winced nor cried aloud.\nUnder the bludgeonings of chance\n      My head is bloody, but unbowed.\n\nBeyond this place of wrath and tears\n      Looms but the Horror of the shade,\nAnd yet the menace of the years\n      Finds and shall find me unafraid.\n\nIt matters not how strait the gate,\n      How charged with punishments the scroll,\nI am the master of my fate,\n      I am the captain of my soul.";
 
 pub const Editor = struct {
     allocator: std.mem.Allocator,
@@ -40,7 +40,7 @@ pub const Editor = struct {
 
         // Main buffer + cursor set + window.
         const buf_id = try editor.createBuffer();
-        editor.getBuffer(buf_id).?.insert(0, ALICE) catch {};
+        editor.getBuffer(buf_id).?.insert(0, FILLER_TEXT) catch {};
         const cs_id = try editor.createCursorSet(buf_id);
         try editor.getCursorSet(cs_id).?.insert(Cursor.init(0));
         editor.focused_window = try editor.createWindow(buf_id, cs_id, width, height);
