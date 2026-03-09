@@ -11,8 +11,38 @@ const Key = @import("key.zig").Key;
 const Palette = @import("palette.zig").Palette;
 const Match = @import("palette.zig").Match;
 const platform = @import("platform/web.zig");
+const grapheme = @import("grapheme.zig");
 
 const FILLER_TEXT = "Out of the night that covers me,\n      Black as the pit from pole to pole,\nI thank whatever gods may be\n      For my unconquerable soul.\n\nIn the fell clutch of circumstance\n      I have not winced nor cried aloud.\nUnder the bludgeonings of chance\n      My head is bloody, but unbowed.\n\nBeyond this place of wrath and tears\n      Looms but the Horror of the shade,\nAnd yet the menace of the years\n      Finds and shall find me unafraid.\n\nIt matters not how strait the gate,\n      How charged with punishments the scroll,\nI am the master of my fate,\n      I am the captain of my soul.";
+
+// ── Cursor movement helpers ────────────────────────────────────────────────
+
+fn cursorLeft(content: []const u8, head: usize) usize {
+    return grapheme.prevGrapheme(content, head);
+}
+
+fn cursorRight(content: []const u8, head: usize) usize {
+    return grapheme.nextGrapheme(content, head);
+}
+
+fn cursorUp(content: []const u8, head: usize) usize {
+    const ls: usize = if (grapheme.findCharsBack(content, head, "\n")) |nl| nl + 1 else 0;
+    if (ls == 0) return head;
+    const col = grapheme.graphemeCount(content, ls, head);
+    const prev_le = ls - 1;
+    const prev_ls: usize = if (grapheme.findCharsBack(content, prev_le, "\n")) |nl| nl + 1 else 0;
+    return grapheme.advanceGraphemes(content, prev_ls, prev_le, col);
+}
+
+fn cursorDown(content: []const u8, head: usize) usize {
+    const le = grapheme.findChars(content, head, "\n");
+    if (le >= content.len) return head;
+    const ls: usize = if (grapheme.findCharsBack(content, head, "\n")) |nl| nl + 1 else 0;
+    const col = grapheme.graphemeCount(content, ls, head);
+    const next_ls = le + 1;
+    const next_le = grapheme.findChars(content, next_ls, "\n");
+    return grapheme.advanceGraphemes(content, next_ls, next_le, col);
+}
 
 pub const Editor = struct {
     allocator: std.mem.Allocator,
@@ -296,6 +326,22 @@ pub const Editor = struct {
 
     // ── Input ─────────────────────────────────────────────────────────────────
 
+    const Dir = enum { left, right, up, down };
+
+    fn move(self: *Editor, win: *Window, cs: *CursorSet, dir: Dir) void {
+        const buf = self.getBuffer(win.buffer_id) orelse return;
+        const content = buf.bytes();
+        for (cs.buf[0..cs.len]) |*c| {
+            c.head = switch (dir) {
+                .left  => cursorLeft(content, c.head),
+                .right => cursorRight(content, c.head),
+                .up    => cursorUp(content, c.head),
+                .down  => cursorDown(content, c.head),
+            };
+            c.offset = 0;
+        }
+    }
+
     pub fn onKeyDown(self: *Editor, time_ms: f64, key: Key, mods: u32) void {
         self.last_input_ms = time_ms;
         if (self.palette_open) {
@@ -307,8 +353,16 @@ pub const Editor = struct {
         const cs = self.getCursorSet(win.cursor_set_id) orelse return;
         switch (win.mode) {
             .normal => switch (key) {
-                .escape => {},
+                .escape      => {},
+                .arrow_left  => self.move(win, cs, .left),
+                .arrow_right => self.move(win, cs, .right),
+                .arrow_up    => self.move(win, cs, .up),
+                .arrow_down  => self.move(win, cs, .down),
                 else => if (key.isPrintable()) switch (@intFromEnum(key)) {
+                    'h' => self.move(win, cs, .left),
+                    'l' => self.move(win, cs, .right),
+                    'k' => self.move(win, cs, .up),
+                    'j' => self.move(win, cs, .down),
                     'i' => win.mode = .insert,
                     ':' => win.mode = .command,
                     '/' => self.openPalette() catch {},
@@ -316,7 +370,11 @@ pub const Editor = struct {
                 },
             },
             .insert => switch (key) {
-                .escape => win.mode = .normal,
+                .escape      => win.mode = .normal,
+                .arrow_left  => self.move(win, cs, .left),
+                .arrow_right => self.move(win, cs, .right),
+                .arrow_up    => self.move(win, cs, .up),
+                .arrow_down  => self.move(win, cs, .down),
                 .backspace => {
                     var it = cs.reverseIter();
                     while (it.next()) |cursor| {
