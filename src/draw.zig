@@ -34,8 +34,6 @@ pub const Cmd = union(enum) {
     fill_rect: struct { rect: Rect, color: Color },
     // text slice is valid for the duration of the render() call that built this list.
     draw_text: struct { x: f32, y: f32, text: []const u8, color: Color, size: f32 },
-    // Separate from fill_rect so the platform can style the cursor (blink, I-beam vs block).
-    draw_cursor: struct { rect: Rect, color: Color },
     clip_rect: Rect,
     clear_clip,
 };
@@ -65,10 +63,6 @@ pub const DrawList = struct {
             return;
         }
         try self.cmds.append(self.allocator, .{ .draw_text = .{ .x = x, .y = y, .text = text, .color = color, .size = size } });
-    }
-
-    pub fn drawCursor(self: *DrawList, rect: Rect, color: Color) !void {
-        try self.cmds.append(self.allocator, .{ .draw_cursor = .{ .rect = rect, .color = color } });
     }
 
     pub fn clipRect(self: *DrawList, rect: Rect) !void {

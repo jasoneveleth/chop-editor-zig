@@ -284,7 +284,7 @@ pub const Editor = struct {
             const cur_head = pal_cs.buf[0].head;
             const cx = pat_x + platform.measureText(pattern[0..cur_head], font_size);
             const cur_y = pal_y + (pal_h - line_height) / 2;
-            try dl.drawCursor(
+            try dl.fillRect(
                 .{ .x = cx - 1, .y = cur_y, .w = 2, .h = line_height },
                 draw.Color.rgb(0, 196, 255),
             );

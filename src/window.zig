@@ -111,7 +111,7 @@ pub const Window = struct {
                                 content[cl_start..cursor.head],
                                 self.font_size,
                             );
-                            try dl.drawCursor(
+                            try dl.fillRect(
                                 .{ .x = cx - 1, .y = cl_y, .w = 2, .h = line_height },
                                 cursor_color,
                             );
