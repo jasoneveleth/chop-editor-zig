@@ -61,6 +61,9 @@ pub const DrawList = struct {
     }
 
     pub fn drawText(self: *DrawList, x: f32, y: f32, text: []const u8, color: Color, size: f32) !void {
+        if (text.len == 0) {
+            return;
+        }
         try self.cmds.append(self.allocator, .{ .draw_text = .{ .x = x, .y = y, .text = text, .color = color, .size = size } });
     }
 

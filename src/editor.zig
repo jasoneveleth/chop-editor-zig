@@ -8,6 +8,11 @@ const CursorSet = @import("cursor_set.zig").CursorSet;
 const CursorSetId = @import("cursor_set.zig").CursorSetId;
 const Cursor = @import("cursor.zig").Cursor;
 const Key = @import("key.zig").Key;
+const Palette = @import("palette.zig").Palette;
+const Match = @import("palette.zig").Match;
+const platform = @import("platform/web.zig");
+
+const ALICE = "Alice was beginning to get very tired of sitting by her sister on the bank, and of having nothing to do: once or twice she had peeped into the book her sister was reading, but it had no pictures or conversations in it, \"and what is the use of a book,\" thought Alice \"without pictures or conversations?\"\n\nSo she was considering in her own mind (as well as she could, for the hot day made her feel very sleepy and stupid), whether the pleasure of making a daisy-chain would be worth the trouble of getting up and picking the daisies, when suddenly a White Rabbit with pink eyes ran close by her.\n";
 
 pub const Editor = struct {
     allocator: std.mem.Allocator,
@@ -17,6 +22,8 @@ pub const Editor = struct {
     /// Maps BufferId (bit-cast to u32) → list of CursorSetIds watching that buffer.
     buffer_cursor_sets: std.AutoHashMap(u32, std.ArrayList(CursorSetId)),
     focused_window: WindowId,
+    palette: Palette,
+    palette_open: bool,
 
     pub fn init(allocator: std.mem.Allocator, width: u32, height: u32) !Editor {
         var editor = Editor{
@@ -26,15 +33,28 @@ pub const Editor = struct {
             .cursor_sets = .{},
             .buffer_cursor_sets = std.AutoHashMap(u32, std.ArrayList(CursorSetId)).init(allocator),
             .focused_window = undefined,
+            .palette = undefined,
+            .palette_open = false,
         };
+
+        // Main buffer + cursor set + window.
         const buf_id = try editor.createBuffer();
+        editor.getBuffer(buf_id).?.insert(0, ALICE) catch {};
         const cs_id = try editor.createCursorSet(buf_id);
         try editor.getCursorSet(cs_id).?.insert(Cursor.init(0));
         editor.focused_window = try editor.createWindow(buf_id, cs_id, width, height);
+
+        // Palette buffer + cursor set (empty, cleared on each open).
+        const pal_buf_id = try editor.createBuffer();
+        const pal_cs_id = try editor.createCursorSet(pal_buf_id);
+        try editor.getCursorSet(pal_cs_id).?.insert(Cursor.init(0));
+        editor.palette = Palette.init(pal_buf_id, pal_cs_id);
+
         return editor;
     }
 
     pub fn deinit(self: *Editor) void {
+        self.palette.deinit(self.allocator);
         var it = self.buffer_cursor_sets.valueIterator();
         while (it.next()) |list| list.deinit(self.allocator);
         self.buffer_cursor_sets.deinit();
@@ -47,7 +67,6 @@ pub const Editor = struct {
     pub fn createBuffer(self: *Editor) !BufferId {
         const index: u24 = @intCast(self.buffers.items.len);
         try self.buffers.append(self.allocator, Buffer.init(self.allocator));
-        self.buffers.items[index].insert(0, "Alice was beginning to get very tired of sitting by her sister on the bank, and of having nothing to do: once or twice she had peeped into the book her sister was reading, but it had no pictures or conversations in it, \"and what is the use of a book,\" thought Alice \"without pictures or conversations?\"\n\nSo she was considering in her own mind (as well as she could, for the hot day made her feel very sleepy and stupid), whether the pleasure of making a daisy-chain would be worth the trouble of getting up and picking the daisies, when suddenly a White Rabbit with pink eyes ran close by her.\n") catch {};
         return BufferId{ .index = index, .generation = 0 };
     }
 
@@ -107,15 +126,179 @@ pub const Editor = struct {
         }
     }
 
+    // ── Search ────────────────────────────────────────────────────────────────
+
+    fn openPalette(self: *Editor) !void {
+        const win = self.getWindow(self.focused_window) orelse return;
+        const cs = self.getCursorSet(win.cursor_set_id) orelse return;
+
+        // Snapshot current cursors for Escape restore.
+        self.palette.saved_cursors = cs.*;
+
+        // Clear palette buffer.
+        const pal_buf = self.getBuffer(self.palette.buffer_id) orelse return;
+        if (pal_buf.len() > 0) self.bufferDelete(self.palette.buffer_id, 0, pal_buf.len());
+
+        // Reset palette cursor to 0.
+        const pal_cs = self.getCursorSet(self.palette.cursor_set_id) orelse return;
+        pal_cs.clear();
+        try pal_cs.insert(Cursor.init(0));
+
+        self.palette.matches.clearRetainingCapacity();
+        self.palette_open = true;
+    }
+
+    fn closePalette(self: *Editor, confirm: bool) void {
+        self.palette_open = false;
+        const win = self.getWindow(self.focused_window) orelse return;
+        const cs = self.getCursorSet(win.cursor_set_id) orelse return;
+
+        if (confirm and self.palette.matches.items.len > 0) {
+            const first = self.palette.matches.items[0];
+            cs.clear();
+            cs.insert(Cursor.init(first.start)) catch {};
+        } else {
+            cs.* = self.palette.saved_cursors;
+        }
+
+        self.palette.matches.clearRetainingCapacity();
+    }
+
+    fn updateMatches(self: *Editor) !void {
+        self.palette.matches.clearRetainingCapacity();
+        const win = self.getWindow(self.focused_window) orelse return;
+        const pal_buf = self.getBuffer(self.palette.buffer_id) orelse return;
+        const main_buf = self.getBuffer(win.buffer_id) orelse return;
+
+        const pattern = pal_buf.bytes();
+        if (pattern.len == 0) return;
+
+        const content = main_buf.bytes();
+        var i: usize = 0;
+        while (i + pattern.len <= content.len) {
+            if (std.mem.eql(u8, content[i .. i + pattern.len], pattern)) {
+                try self.palette.matches.append(self.allocator, .{ .start = i, .end = i + pattern.len });
+                i += pattern.len;
+            } else {
+                i += 1;
+            }
+        }
+    }
+
+    fn handlePaletteKey(self: *Editor, key: Key, mods: u32) void {
+        _ = mods;
+        const pal_cs = self.getCursorSet(self.palette.cursor_set_id) orelse return;
+
+        switch (key) {
+            .escape => self.closePalette(false),
+            .enter  => self.closePalette(true),
+
+            .backspace => {
+                if (pal_cs.len > 0 and pal_cs.buf[0].head > 0) {
+                    self.bufferDelete(self.palette.buffer_id, pal_cs.buf[0].head - 1, 1);
+                    self.updateMatches() catch {};
+                }
+            },
+
+            .arrow_left => {
+                if (pal_cs.len > 0 and pal_cs.buf[0].head > 0) {
+                    pal_cs.buf[0].head -= 1;
+                    pal_cs.buf[0].offset = 0;
+                }
+            },
+
+            .arrow_right => {
+                if (pal_cs.len > 0) {
+                    const pal_buf = self.getBuffer(self.palette.buffer_id) orelse return;
+                    if (pal_cs.buf[0].head < pal_buf.len()) {
+                        pal_cs.buf[0].head += 1;
+                        pal_cs.buf[0].offset = 0;
+                    }
+                }
+            },
+
+            else => if (key.isPrintable()) {
+                var encoded: [4]u8 = undefined;
+                const cp: u21 = @intCast(@intFromEnum(key));
+                const byte_len = std.unicode.utf8Encode(cp, &encoded) catch return;
+                if (pal_cs.len > 0) {
+                    self.bufferInsert(self.palette.buffer_id, pal_cs.buf[0].head, encoded[0..byte_len]) catch return;
+                    self.updateMatches() catch {};
+                }
+            },
+        }
+    }
+
+    // ── Rendering ─────────────────────────────────────────────────────────────
+
     pub fn buildDrawList(self: *Editor, dl: *draw.DrawList) !void {
         const win = self.getWindow(self.focused_window) orelse return;
         const buf = self.getBuffer(win.buffer_id) orelse return;
         const cs = self.getCursorSet(win.cursor_set_id) orelse return;
-        try win.buildDrawList(dl, buf, cs);
+
+        const highlights: []const Match = if (self.palette_open) self.palette.matches.items else &.{};
+        try win.buildDrawList(dl, buf, cs, highlights);
+
+        if (self.palette_open) try self.drawPalette(dl, win);
     }
 
+    fn drawPalette(self: *Editor, dl: *draw.DrawList, win: *const Window) !void {
+        const font_size: f32 = 14;
+        const line_height = font_size * 1.4;
+
+        const pal_w: f32 = @min(600, win.width - 80);
+        const pal_h: f32 = line_height * 2;
+        const pal_x: f32 = (win.width - pal_w) / 2;
+        const pal_y: f32 = 24;
+        const baseline = pal_y + (pal_h + font_size) / 2;
+        const text_x = pal_x + 14;
+
+        // Box background.
+        try dl.fillRect(
+            .{ .x = pal_x, .y = pal_y, .w = pal_w, .h = pal_h },
+            draw.Color.rgb(45, 45, 45),
+        );
+
+        // "/" prompt.
+        const prompt = "/";
+        const prompt_w = platform.measureText(prompt, font_size);
+        try dl.drawText(text_x, baseline, prompt, draw.Color.rgb(100, 100, 100), font_size);
+
+        // Pattern text.
+        const pal_buf = self.getBuffer(self.palette.buffer_id) orelse return;
+        const pattern = pal_buf.bytes();
+        const pat_x = text_x + prompt_w + 6;
+        try dl.drawText(pat_x, baseline, pattern, draw.Color.rgb(220, 220, 220), font_size);
+
+        // Match count hint.
+        if (self.palette.matches.items.len > 0) {
+            var count_buf: [32]u8 = undefined;
+            const count_str = std.fmt.bufPrint(&count_buf, "{d} matches", .{self.palette.matches.items.len}) catch "";
+            const count_x = pal_x + pal_w - platform.measureText(count_str, font_size) - 14;
+            try dl.drawText(count_x, baseline, count_str, draw.Color.rgb(100, 100, 100), font_size);
+        }
+
+        // Palette cursor.
+        const pal_cs = self.getCursorSet(self.palette.cursor_set_id) orelse return;
+        if (pal_cs.len > 0) {
+            const cur_head = pal_cs.buf[0].head;
+            const cx = pat_x + platform.measureText(pattern[0..cur_head], font_size);
+            const cur_y = pal_y + (pal_h - line_height) / 2;
+            try dl.drawCursor(
+                .{ .x = cx - 1, .y = cur_y, .w = 2, .h = line_height },
+                draw.Color.rgb(0, 196, 255),
+            );
+        }
+    }
+
+    // ── Input ─────────────────────────────────────────────────────────────────
+
     pub fn onKeyDown(self: *Editor, key: Key, mods: u32) void {
-        _ = mods;
+        if (self.palette_open) {
+            self.handlePaletteKey(key, mods);
+            return;
+        }
+
         const win = self.getWindow(self.focused_window) orelse return;
         const cs = self.getCursorSet(win.cursor_set_id) orelse return;
         switch (win.mode) {
@@ -124,6 +307,7 @@ pub const Editor = struct {
                 else => if (key.isPrintable()) switch (@intFromEnum(key)) {
                     'i' => win.mode = .insert,
                     ':' => win.mode = .command,
+                    '/' => self.openPalette() catch {},
                     else => {},
                 },
             },

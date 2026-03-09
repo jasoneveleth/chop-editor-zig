@@ -4,6 +4,7 @@ const Buffer = @import("buffer.zig").Buffer;
 const BufferId = @import("buffer.zig").BufferId;
 const CursorSet = @import("cursor_set.zig").CursorSet;
 const CursorSetId = @import("cursor_set.zig").CursorSetId;
+const Match = @import("palette.zig").Match;
 // Hardcoded to web for now — measureText is needed during layout.
 const platform = @import("platform/web.zig");
 
@@ -43,7 +44,7 @@ pub const Window = struct {
 
     // No deinit — Window owns no heap memory.
 
-    pub fn buildDrawList(self: *Window, dl: *draw.DrawList, buf: *const Buffer, cs: *const CursorSet) !void {
+    pub fn buildDrawList(self: *Window, dl: *draw.DrawList, buf: *const Buffer, cs: *const CursorSet, highlights: []const Match) !void {
         // Background
         try dl.fillRect(
             .{ .x = 0, .y = 0, .w = self.width, .h = self.height },
@@ -54,7 +55,7 @@ pub const Window = struct {
         const gutter_width: f32 = 8;
         const content = buf.bytes();
 
-        // Render visible lines.
+        // Render visible lines — highlights drawn before text so text sits on top.
         var line_y: f32 = -self.scroll_y;
         var line_start: usize = 0;
         var i: usize = 0;
@@ -64,6 +65,20 @@ pub const Window = struct {
             if (at_newline or at_end) {
                 const baseline = line_y + self.font_size;
                 if (baseline >= 0 and line_y < self.height) {
+                    // Draw match highlights for this line.
+                    for (highlights, 0..) |m, mi| {
+                        const m_start = @max(m.start, line_start);
+                        const m_end   = @min(m.end,   i);
+                        if (m_start >= m_end) continue;
+                        const hx = gutter_width + platform.measureText(content[line_start..m_start], self.font_size);
+                        const hw = platform.measureText(content[m_start..m_end], self.font_size);
+                        const color = if (mi == 0)
+                            draw.Color.rgba(255, 200, 0, 180) // first match: emphasized
+                        else
+                            draw.Color.rgba(255, 200, 0, 60);  // rest: dim
+                        try dl.fillRect(.{ .x = hx, .y = line_y, .w = hw, .h = line_height }, color);
+                    }
+
                     try dl.drawText(
                         gutter_width, baseline,
                         content[line_start..i],

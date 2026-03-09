@@ -57,6 +57,14 @@ const imports = {
       ctx.font = `${size}px 'IBM Plex Mono', monospace`;
       return ctx.measureText(wasmStr(ptr, len)).width;
     },
+
+    js_panic(ptr, len) {
+      throw new Error("zig panic: " + wasmStr(ptr, len));
+    },
+
+    js_log(ptr, len) {
+      console.log(wasmStr(ptr, len));
+    },
   },
 };
 

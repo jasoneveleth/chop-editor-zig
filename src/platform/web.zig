@@ -1,4 +1,5 @@
 const draw = @import("../draw.zig");
+const std = @import("std");
 
 // JS-provided drawing functions. All imported from the "env" module by default
 // in freestanding WASM. The JS host must supply these in the imports object.
@@ -11,6 +12,20 @@ extern fn js_clear_clip() void;
 // Called during layout so the editor can know how wide a string will render.
 // JS uses ctx.measureText() and returns the width in pixels.
 extern fn js_measure_text(ptr: [*]const u8, len: u32, size: f32) f32;
+// Logging
+extern fn js_log(ptr: [*]const u8, len: usize) void;
+extern fn js_panic(ptr: [*]const u8, len: usize) void;
+
+pub fn panic(msg: []const u8, _: ?*@import("builtin").StackTrace, _: ?usize) noreturn {
+    js_log(msg.ptr, msg.len);
+    @trap();
+}
+
+pub fn log(comptime fmt: []const u8, args: anytype) void {
+    var buf: [1024]u8 = undefined;
+    const s = std.fmt.bufPrint(&buf, fmt, args) catch return;
+    js_log(s.ptr, s.len);
+}
 
 pub fn present(dl: *const draw.DrawList) void {
     for (dl.cmds.items) |cmd| {
@@ -35,5 +50,8 @@ pub fn present(dl: *const draw.DrawList) void {
 }
 
 pub fn measureText(text: []const u8, size: f32) f32 {
+    if (text.len == 0) {
+        return 0;
+    }
     return js_measure_text(text.ptr, @intCast(text.len), size);
 }

@@ -64,4 +64,8 @@ pub const CursorSet = struct {
     pub fn adjustForDelete(self: *CursorSet, pos: usize, len: usize) void {
         for (self.buf[0..self.len]) |*cursor| cursor.adjustForDelete(pos, len);
     }
+
+    pub fn clear(self: *CursorSet) void {
+        self.len = 0;
+    }
 };
