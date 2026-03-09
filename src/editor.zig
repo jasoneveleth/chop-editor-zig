@@ -89,7 +89,6 @@ pub const Editor = struct {
     buffer_cursor_sets: std.AutoHashMap(u32, std.ArrayList(CursorSetId)),
     focused_window: WindowId,
     palette: Palette,
-    palette_open: bool,
     last_input_ms: f64 = 0,
 
     pub fn init(allocator: std.mem.Allocator, width: u32, height: u32) !Editor {
@@ -101,7 +100,6 @@ pub const Editor = struct {
             .buffer_cursor_sets = std.AutoHashMap(u32, std.ArrayList(CursorSetId)).init(allocator),
             .focused_window = undefined,
             .palette = undefined,
-            .palette_open = false,
         };
 
         // Main buffer + cursor set + window.
@@ -199,25 +197,22 @@ pub const Editor = struct {
         const win = self.getWindow(self.focused_window) orelse return;
         const cs = self.getCursorSet(win.cursor_set_id) orelse return;
 
-        // Snapshot current cursors for Escape restore.
         self.palette.saved_cursors = cs.*;
 
-        // Clear palette buffer.
         const pal_buf = self.getBuffer(self.palette.buffer_id) orelse return;
         if (pal_buf.len() > 0) self.bufferDelete(self.palette.buffer_id, 0, pal_buf.len());
 
-        // Reset palette cursor to 0.
         const pal_cs = self.getCursorSet(self.palette.cursor_set_id) orelse return;
         pal_cs.clear();
         try pal_cs.insert(Cursor.init(0));
 
         self.palette.matches.clearRetainingCapacity();
-        self.palette_open = true;
+        win.mode = .command;
     }
 
     fn closePalette(self: *Editor, confirm: bool) void {
-        self.palette_open = false;
         const win = self.getWindow(self.focused_window) orelse return;
+        win.mode = .normal;
         const cs = self.getCursorSet(win.cursor_set_id) orelse return;
 
         if (confirm and self.palette.matches.items.len > 0) {
@@ -252,50 +247,6 @@ pub const Editor = struct {
         }
     }
 
-    fn handlePaletteKey(self: *Editor, key: Key, mods: u32) void {
-        _ = mods;
-        const pal_cs = self.getCursorSet(self.palette.cursor_set_id) orelse return;
-
-        switch (key) {
-            .escape => self.closePalette(false),
-            .enter  => self.closePalette(true),
-
-            .backspace => {
-                if (pal_cs.len > 0 and pal_cs.buf[0].head > 0) {
-                    self.bufferDelete(self.palette.buffer_id, pal_cs.buf[0].head - 1, 1);
-                    self.updateMatches() catch {};
-                }
-            },
-
-            .arrow_left => {
-                if (pal_cs.len > 0 and pal_cs.buf[0].head > 0) {
-                    pal_cs.buf[0].head -= 1;
-                    pal_cs.buf[0].offset = 0;
-                }
-            },
-
-            .arrow_right => {
-                if (pal_cs.len > 0) {
-                    const pal_buf = self.getBuffer(self.palette.buffer_id) orelse return;
-                    if (pal_cs.buf[0].head < pal_buf.len()) {
-                        pal_cs.buf[0].head += 1;
-                        pal_cs.buf[0].offset = 0;
-                    }
-                }
-            },
-
-            else => if (key.isPrintable()) {
-                var encoded: [4]u8 = undefined;
-                const cp: u21 = @intCast(@intFromEnum(key));
-                const byte_len = std.unicode.utf8Encode(cp, &encoded) catch return;
-                if (pal_cs.len > 0) {
-                    self.bufferInsert(self.palette.buffer_id, pal_cs.buf[0].head, encoded[0..byte_len]) catch return;
-                    self.updateMatches() catch {};
-                }
-            },
-        }
-    }
-
     // ── Rendering ─────────────────────────────────────────────────────────────
 
     pub fn buildDrawList(self: *Editor, dl: *draw.DrawList, time_ms: f64) !void {
@@ -305,10 +256,10 @@ pub const Editor = struct {
         const buf = self.getBuffer(win.buffer_id) orelse return;
         const cs = self.getCursorSet(win.cursor_set_id) orelse return;
 
-        const highlights: []const Match = if (self.palette_open) self.palette.matches.items else &.{};
+        const highlights: []const Match = if (win.mode == .command) self.palette.matches.items else &.{};
         try win.buildDrawList(dl, buf, cs, highlights, cursor_visible);
 
-        if (self.palette_open) try self.drawPalette(dl, win);
+        if (win.mode == .command) try self.drawPalette(dl, win);
     }
 
     fn drawPalette(self: *Editor, dl: *draw.DrawList, win: *const Window) !void {
@@ -400,12 +351,8 @@ pub const Editor = struct {
     }
 
     pub fn onKeyDown(self: *Editor, time_ms: f64, key: Key, mods: u32) void {
+        _ = mods;
         self.last_input_ms = time_ms;
-        if (self.palette_open) {
-            self.handlePaletteKey(key, mods);
-            return;
-        }
-
         const win = self.getWindow(self.focused_window) orelse return;
         const cs = self.getCursorSet(win.cursor_set_id) orelse return;
         switch (win.mode) {
@@ -421,8 +368,7 @@ pub const Editor = struct {
                     'k' => self.move(win, cs, .up),
                     'j' => self.move(win, cs, .down),
                     'i' => win.mode = .insert,
-                    ':' => win.mode = .command,
-                    '/' => self.openPalette() catch {},
+                    '/', ':' => self.openPalette() catch {},
                     else => {},
                 },
             },
@@ -452,9 +398,40 @@ pub const Editor = struct {
                     self.insertAtCursors(win, cs, encoded[0..byte_len]);
                 },
             },
-            .command => switch (key) {
-                .escape => win.mode = .normal,
-                else => {},
+            .command => {
+                const pal_cs = self.getCursorSet(self.palette.cursor_set_id) orelse return;
+                switch (key) {
+                    .escape => self.closePalette(false),
+                    .enter  => self.closePalette(true),
+                    .backspace => {
+                        if (pal_cs.len > 0 and pal_cs.buf[0].head > 0) {
+                            self.bufferDelete(self.palette.buffer_id, pal_cs.buf[0].head - 1, 1);
+                            self.updateMatches() catch {};
+                        }
+                    },
+                    .arrow_left => {
+                        if (pal_cs.len > 0 and pal_cs.buf[0].head > 0) {
+                            pal_cs.buf[0].head -= 1;
+                            pal_cs.buf[0].offset = 0;
+                        }
+                    },
+                    .arrow_right => {
+                        const pal_buf = self.getBuffer(self.palette.buffer_id) orelse return;
+                        if (pal_cs.len > 0 and pal_cs.buf[0].head < pal_buf.len()) {
+                            pal_cs.buf[0].head += 1;
+                            pal_cs.buf[0].offset = 0;
+                        }
+                    },
+                    else => if (key.isPrintable()) {
+                        var encoded: [4]u8 = undefined;
+                        const cp: u21 = @intCast(@intFromEnum(key));
+                        const byte_len = std.unicode.utf8Encode(cp, &encoded) catch return;
+                        if (pal_cs.len > 0) {
+                            self.bufferInsert(self.palette.buffer_id, pal_cs.buf[0].head, encoded[0..byte_len]) catch return;
+                            self.updateMatches() catch {};
+                        }
+                    },
+                }
             },
         }
     }
