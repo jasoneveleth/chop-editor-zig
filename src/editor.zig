@@ -316,10 +316,10 @@ pub const Editor = struct {
         const line_height = font_size * 1.4;
 
         const pal_w: f32 = @min(600, win.width - 80);
-        const pal_h: f32 = line_height * 2;
+        const pal_h: f32 = line_height * 1.5;
         const pal_x: f32 = (win.width - pal_w) / 2;
         const pal_y: f32 = 24;
-        const baseline = pal_y + (pal_h + font_size) / 2;
+        const baseline = pal_y + pal_h/2 + font_size/3; // should come from font metrics, but eyeballing for now
         const text_x = pal_x + 14;
 
         // Box background.
