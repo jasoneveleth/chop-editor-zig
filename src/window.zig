@@ -2,7 +2,10 @@ const std = @import("std");
 const draw = @import("draw.zig");
 const Buffer = @import("buffer.zig").Buffer;
 const BufferId = @import("buffer.zig").BufferId;
-const Cursor = @import("cursor.zig").Cursor;
+const CursorSet = @import("cursor_set.zig").CursorSet;
+const CursorSetId = @import("cursor_set.zig").CursorSetId;
+// Hardcoded to web for now — measureText is needed during layout.
+const platform = @import("platform/web.zig");
 
 pub const WindowId = packed struct(u32) {
     index: u24,
@@ -16,38 +19,31 @@ pub const Mode = enum {
 };
 
 pub const Window = struct {
-    allocator: std.mem.Allocator,
     mode: Mode,
     buffer_id: BufferId,
-    cursors: std.ArrayList(Cursor),
+    cursor_set_id: CursorSetId,
     scroll_x: f32,
     scroll_y: f32,
     width: f32,
     height: f32,
     font_size: f32,
 
-    pub fn init(allocator: std.mem.Allocator, buffer_id: BufferId, width: u32, height: u32) !Window {
-        var win = Window{
-            .allocator = allocator,
+    pub fn init(buffer_id: BufferId, cursor_set_id: CursorSetId, width: u32, height: u32) Window {
+        return .{
             .mode = .normal,
             .buffer_id = buffer_id,
-            .cursors = .{},
+            .cursor_set_id = cursor_set_id,
             .scroll_x = 0,
             .scroll_y = 0,
             .width = @floatFromInt(width),
             .height = @floatFromInt(height),
             .font_size = 14,
         };
-        // Start with one cursor at the beginning of the buffer.
-        try win.cursors.append(allocator, Cursor.init(0));
-        return win;
     }
 
-    pub fn deinit(self: *Window) void {
-        self.cursors.deinit(self.allocator);
-    }
+    // No deinit — Window owns no heap memory.
 
-    pub fn buildDrawList(self: *Window, dl: *draw.DrawList, buf: *const Buffer) !void {
+    pub fn buildDrawList(self: *Window, dl: *draw.DrawList, buf: *const Buffer, cs: *const CursorSet) !void {
         // Background
         try dl.fillRect(
             .{ .x = 0, .y = 0, .w = self.width, .h = self.height },
@@ -55,26 +51,22 @@ pub const Window = struct {
         );
 
         const line_height = self.font_size * 1.4;
-        const gutter_width: f32 = 8; // left margin
-
-        // Render visible lines by splitting on newlines.
-        var line_y: f32 = -self.scroll_y;
-        var line_start: usize = 0;
+        const gutter_width: f32 = 8;
         const content = buf.bytes();
 
+        // Render visible lines.
+        var line_y: f32 = -self.scroll_y;
+        var line_start: usize = 0;
         var i: usize = 0;
         while (i <= content.len) : (i += 1) {
             const at_end = i == content.len;
             const at_newline = !at_end and content[i] == '\n';
-
             if (at_newline or at_end) {
                 const baseline = line_y + self.font_size;
                 if (baseline >= 0 and line_y < self.height) {
-                    const line = content[line_start..i];
                     try dl.drawText(
-                        gutter_width,
-                        baseline,
-                        line,
+                        gutter_width, baseline,
+                        content[line_start..i],
                         draw.Color.rgb(204, 204, 204),
                         self.font_size,
                     );
@@ -85,44 +77,54 @@ pub const Window = struct {
             }
         }
 
-        // Cursors: stub — draw a fixed cursor rect until we have pixel-accurate
-        // layout from measureText.
-        const normal_color = draw.Color.rgb(0, 196, 255); // iA Writer blue #00C4FF
-        const insert_color = draw.Color.rgb(223, 41, 53); // #df2935
-        if (self.mode == .insert) {
-            try dl.drawCursor(
-                .{ .x = gutter_width, .y = -self.scroll_y, .w = 2, .h = line_height },
-                insert_color,
-            );
-        } else {
-            try dl.drawCursor(
-                .{ .x = gutter_width, .y = -self.scroll_y, .w = 2, .h = line_height },
-                normal_color,
-            );
+        // Draw each cursor at its accurate screen position.
+        const normal_color = draw.Color.rgb(0, 196, 255); // #00C4FF
+        const insert_color = draw.Color.rgb(223, 41, 53);  // #df2935
+        const cursor_color = if (self.mode == .insert) insert_color else normal_color;
+
+        for (cs.iter()) |cursor| {
+            var cl_start: usize = 0;
+            var cl_y: f32 = -self.scroll_y;
+            var j: usize = 0;
+            while (j <= content.len) : (j += 1) {
+                const at_end_j = j == content.len;
+                const at_nl_j = !at_end_j and content[j] == '\n';
+                if (at_nl_j or at_end_j) {
+                    if (cursor.head >= cl_start and cursor.head <= j) {
+                        if (cl_y + line_height >= 0 and cl_y < self.height) {
+                            const cx = gutter_width + platform.measureText(
+                                content[cl_start..cursor.head],
+                                self.font_size,
+                            );
+                            try dl.drawCursor(
+                                .{ .x = cx, .y = cl_y, .w = 2, .h = line_height },
+                                cursor_color,
+                            );
+                        }
+                        break;
+                    }
+                    cl_start = j + 1;
+                    cl_y += line_height;
+                }
+            }
         }
     }
 
     pub fn onKey(self: *Window, keycode: u32, mods: u32) void {
-        _ = keycode;
         _ = mods;
-        _ = self;
-        // TODO: dispatch to commands based on mode
-    }
-
-    pub fn onChar(self: *Window, codepoint: u32, buf: *Buffer) void {
-        if (self.mode != .insert) return;
-        var encoded: [4]u8 = undefined;
-        const byte_len = std.unicode.utf8Encode(@intCast(codepoint), &encoded) catch return;
-        for (self.cursors.items) |*cursor| {
-            buf.insert(cursor.head, encoded[0..byte_len]) catch return;
-            // Adjust all other cursors for this insertion.
-            for (self.cursors.items) |*other| {
-                if (other != cursor) {
-                    other.adjustForInsert(cursor.head, byte_len);
-                }
-            }
-            cursor.head += byte_len;
-            cursor.anchor = cursor.head;
+        switch (self.mode) {
+            .normal => switch (keycode) {
+                73 => self.mode = .insert, // i
+                else => {},
+            },
+            .insert => switch (keycode) {
+                27 => self.mode = .normal, // Escape
+                else => {},
+            },
+            .command => switch (keycode) {
+                27 => self.mode = .normal, // Escape
+                else => {},
+            },
         }
     }
 
