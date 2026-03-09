@@ -142,7 +142,7 @@ async function main() {
   // Keyboard
   window.addEventListener("keydown", (e) => {
     e.preventDefault();
-    wasm.exports.on_key_down(e.timeStamp, encodeKey(e), modsFromEvent(e));
+    wasm.exports.on_key_down(lastFrameTs, encodeKey(e), modsFromEvent(e));
   });
   window.addEventListener("keyup", (e) => {
     wasm.exports.on_key_up(encodeKey(e), modsFromEvent(e));
@@ -156,11 +156,13 @@ async function main() {
   // Scroll
   window.addEventListener("wheel", (e) => {
     e.preventDefault();
-    wasm.exports.on_scroll(e.timeStamp, e.deltaX, e.deltaY);
+    wasm.exports.on_scroll(lastFrameTs, e.deltaX, e.deltaY);
   }, { passive: false });
 
   // Render loop
+  let lastFrameTs = 0;
   function frame(ts) {
+    lastFrameTs = ts;
     wasm.exports.render(ts);
     requestAnimationFrame(frame);
   }

@@ -25,23 +25,38 @@ fn cursorRight(content: []const u8, head: usize) usize {
     return grapheme.nextGrapheme(content, head);
 }
 
-fn cursorUp(content: []const u8, head: usize) usize {
-    const ls: usize = if (grapheme.findCharsBack(content, head, "\n")) |nl| nl + 1 else 0;
-    if (ls == 0) return head;
-    const col = grapheme.graphemeCount(content, ls, head);
-    const prev_le = ls - 1;
-    const prev_ls: usize = if (grapheme.findCharsBack(content, prev_le, "\n")) |nl| nl + 1 else 0;
-    return grapheme.advanceGraphemes(content, prev_ls, prev_le, col);
+/// Walk graphemes on [line_start, line_end), return the byte offset whose
+/// measured x-position is closest to target_x.
+fn closestPosToX(content: []const u8, line_start: usize, line_end: usize, target_x: f32, font_size: f32) usize {
+    var it = grapheme.GraphemeIterator{ .text = content[0..line_end], .pos = @intCast(line_start) };
+    var prev_pos: usize = line_start;
+    var prev_x: f32 = 0;
+    while (it.next()) |_| {
+        const cur_pos: usize = @as(usize, it.pos);
+        const cur_x = platform.measureText(content[line_start..cur_pos], font_size);
+        if (cur_x >= target_x) {
+            return if (target_x - prev_x <= cur_x - target_x) prev_pos else cur_pos;
+        }
+        prev_pos = cur_pos;
+        prev_x = cur_x;
+    }
+    return prev_pos;
 }
 
-fn cursorDown(content: []const u8, head: usize) usize {
+fn cursorUp(content: []const u8, head: usize, col_px: f32, font_size: f32) usize {
+    const ls = grapheme.lineStart(content, head);
+    if (ls == 0) return head;
+    const prev_le = ls - 1;
+    const prev_ls = grapheme.lineStart(content, prev_le);
+    return closestPosToX(content, prev_ls, prev_le, col_px, font_size);
+}
+
+fn cursorDown(content: []const u8, head: usize, col_px: f32, font_size: f32) usize {
     const le = grapheme.findChars(content, head, "\n");
     if (le >= content.len) return head;
-    const ls: usize = if (grapheme.findCharsBack(content, head, "\n")) |nl| nl + 1 else 0;
-    const col = grapheme.graphemeCount(content, ls, head);
     const next_ls = le + 1;
     const next_le = grapheme.findChars(content, next_ls, "\n");
-    return grapheme.advanceGraphemes(content, next_ls, next_le, col);
+    return closestPosToX(content, next_ls, next_le, col_px, font_size);
 }
 
 pub const Editor = struct {
@@ -332,12 +347,18 @@ pub const Editor = struct {
         const buf = self.getBuffer(win.buffer_id) orelse return;
         const content = buf.bytes();
         for (cs.buf[0..cs.len]) |*c| {
-            c.head = switch (dir) {
-                .left  => cursorLeft(content, c.head),
-                .right => cursorRight(content, c.head),
-                .up    => cursorUp(content, c.head),
-                .down  => cursorDown(content, c.head),
-            };
+            switch (dir) {
+                .left, .right => {
+                    c.head = if (dir == .left) cursorLeft(content, c.head) else cursorRight(content, c.head);
+                    win.preferred_col = null;
+                },
+                .up, .down => {
+                    const ls = grapheme.lineStart(content, c.head);
+                    const col_px = win.preferred_col orelse platform.measureText(content[ls..c.head], win.font_size);
+                    win.preferred_col = col_px;
+                    c.head = if (dir == .up) cursorUp(content, c.head, col_px, win.font_size) else cursorDown(content, c.head, col_px, win.font_size);
+                },
+            }
             c.offset = 0;
         }
     }
@@ -376,6 +397,7 @@ pub const Editor = struct {
                 .arrow_up    => self.move(win, cs, .up),
                 .arrow_down  => self.move(win, cs, .down),
                 .backspace => {
+                    win.preferred_col = null;
                     var it = cs.reverseIter();
                     while (it.next()) |cursor| {
                         if (cursor.head > 0)
@@ -383,12 +405,14 @@ pub const Editor = struct {
                     }
                 },
                 .enter => {
+                    win.preferred_col = null;
                     var it = cs.reverseIter();
                     while (it.next()) |cursor| {
                         self.bufferInsert(win.buffer_id, cursor.head, "\n") catch return;
                     }
                 },
                 else => if (key.isPrintable()) {
+                    win.preferred_col = null;
                     var encoded: [4]u8 = undefined;
                     const cp: u21 = @intCast(@intFromEnum(key));
                     const byte_len = std.unicode.utf8Encode(cp, &encoded) catch return;

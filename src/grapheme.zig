@@ -154,3 +154,7 @@ pub fn advanceGraphemes(text: []const u8, start: usize, end: usize, n: usize) us
     }
     return @as(usize, it.pos);
 }
+
+pub fn lineStart(content: []const u8, head: usize) usize {
+    return if (findCharsBack(content, head, "\n")) |nl| nl + 1 else 0;
+}

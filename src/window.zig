@@ -28,6 +28,7 @@ pub const Window = struct {
     width: f32,
     height: f32,
     font_size: f32,
+    preferred_col: ?f32 = null,
 
     pub fn init(buffer_id: BufferId, cursor_set_id: CursorSetId, width: u32, height: u32) Window {
         return .{
