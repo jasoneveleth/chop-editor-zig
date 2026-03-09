@@ -7,6 +7,7 @@ const WindowId = @import("window.zig").WindowId;
 const CursorSet = @import("cursor_set.zig").CursorSet;
 const CursorSetId = @import("cursor_set.zig").CursorSetId;
 const Cursor = @import("cursor.zig").Cursor;
+const Key = @import("key.zig").Key;
 
 pub const Editor = struct {
     allocator: std.mem.Allocator,
@@ -113,23 +114,53 @@ pub const Editor = struct {
         try win.buildDrawList(dl, buf, cs);
     }
 
-    pub fn onKey(self: *Editor, keycode: u32, mods: u32) void {
-        if (self.getWindow(self.focused_window)) |win| win.onKey(keycode, mods);
+    pub fn onKeyDown(self: *Editor, key: Key, mods: u32) void {
+        _ = mods;
+        const win = self.getWindow(self.focused_window) orelse return;
+        const cs = self.getCursorSet(win.cursor_set_id) orelse return;
+        switch (win.mode) {
+            .normal => switch (key) {
+                .escape => {},
+                else => if (key.isPrintable()) switch (@intFromEnum(key)) {
+                    'i' => win.mode = .insert,
+                    ':' => win.mode = .command,
+                    else => {},
+                },
+            },
+            .insert => switch (key) {
+                .escape => win.mode = .normal,
+                .backspace => {
+                    var it = cs.reverseIter();
+                    while (it.next()) |cursor| {
+                        if (cursor.head > 0)
+                            self.bufferDelete(win.buffer_id, cursor.head - 1, 1);
+                    }
+                },
+                .enter => {
+                    var it = cs.reverseIter();
+                    while (it.next()) |cursor| {
+                        self.bufferInsert(win.buffer_id, cursor.head, "\n") catch return;
+                    }
+                },
+                else => if (key.isPrintable()) {
+                    var encoded: [4]u8 = undefined;
+                    const cp: u21 = @intCast(@intFromEnum(key));
+                    const byte_len = std.unicode.utf8Encode(cp, &encoded) catch return;
+                    var it = cs.reverseIter();
+                    while (it.next()) |cursor| {
+                        self.bufferInsert(win.buffer_id, cursor.head, encoded[0..byte_len]) catch return;
+                    }
+                },
+            },
+            .command => switch (key) {
+                .escape => win.mode = .normal,
+                else => {},
+            },
+        }
     }
 
-    pub fn onChar(self: *Editor, codepoint: u32) void {
-        const win = self.getWindow(self.focused_window) orelse return;
-        if (win.mode != .insert) return;
-        const cs = self.getCursorSet(win.cursor_set_id) orelse return;
-
-        var encoded: [4]u8 = undefined;
-        const byte_len = std.unicode.utf8Encode(@intCast(codepoint), &encoded) catch return;
-
-        // Iterate in reverse so earlier cursor positions aren't shifted by later insertions.
-        var it = cs.reverseIter();
-        while (it.next()) |cursor| {
-            self.bufferInsert(win.buffer_id, cursor.head, encoded[0..byte_len]) catch return;
-        }
+    pub fn onKeyUp(self: *Editor, key: Key, mods: u32) void {
+        _ = self; _ = key; _ = mods;
     }
 
     pub fn onMouse(self: *Editor, x: f32, y: f32, button: u8, kind: u8) void {

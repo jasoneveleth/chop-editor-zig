@@ -74,12 +74,30 @@ function resize(wasm) {
   wasm.exports.on_resize(Math.round(w), Math.round(h));
 }
 
-// ── Key event → keycode + mods bitmask ───────────────────────────────────────
+// ── Key encoding ──────────────────────────────────────────────────────────────
+// Mirrors key.zig: codepoints 0–0x10FFFF are printable chars (already
+// layout/shift-resolved by e.key); 0x110000+ are special keys.
 
 const MOD_SHIFT = 1 << 0;
 const MOD_CTRL  = 1 << 1;
 const MOD_ALT   = 1 << 2;
 const MOD_META  = 1 << 3; // Cmd on macOS
+
+const SPECIAL_KEYS = {
+  Enter:      0x110000,
+  Escape:     0x110001,
+  Backspace:  0x110002,
+  Tab:        0x110003,
+  ArrowLeft:  0x110004,
+  ArrowRight: 0x110005,
+  ArrowUp:    0x110006,
+  ArrowDown:  0x110007,
+};
+
+function encodeKey(e) {
+  if (e.key.length === 1) return e.key.codePointAt(0);
+  return SPECIAL_KEYS[e.key] ?? 0xFFFFFFFF;
+}
 
 function modsFromEvent(e) {
   return (e.shiftKey ? MOD_SHIFT : 0) |
@@ -115,14 +133,11 @@ async function main() {
 
   // Keyboard
   window.addEventListener("keydown", (e) => {
-    const mods = modsFromEvent(e);
-    wasm.exports.on_key(e.keyCode, mods);
-
-    // Send printable characters via on_char.
-    if (e.key.length === 1) {
-      const cp = e.key.codePointAt(0);
-      if (cp !== undefined) wasm.exports.on_char(cp);
-    }
+    e.preventDefault();
+    wasm.exports.on_key_down(encodeKey(e), modsFromEvent(e));
+  });
+  window.addEventListener("keyup", (e) => {
+    wasm.exports.on_key_up(encodeKey(e), modsFromEvent(e));
   });
 
   // Mouse

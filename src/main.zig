@@ -2,6 +2,7 @@ const std = @import("std");
 const Editor = @import("editor.zig").Editor;
 const draw = @import("draw.zig");
 const platform = @import("platform/web.zig");
+const Key = @import("key.zig").Key;
 
 const allocator = std.heap.page_allocator;
 
@@ -21,14 +22,14 @@ export fn render() void {
     platform.present(&dl);
 }
 
-export fn on_key(keycode: u32, mods: u32) void {
+export fn on_key_down(raw: u32, mods: u32) void {
     if (!initialized) return;
-    editor.onKey(keycode, mods);
+    editor.onKeyDown(@enumFromInt(raw), mods);
 }
 
-export fn on_char(codepoint: u32) void {
+export fn on_key_up(raw: u32, mods: u32) void {
     if (!initialized) return;
-    editor.onChar(codepoint);
+    editor.onKeyUp(@enumFromInt(raw), mods);
 }
 
 export fn on_mouse(x: f32, y: f32, button: u8, kind: u8) void {

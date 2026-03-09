@@ -110,24 +110,6 @@ pub const Window = struct {
         }
     }
 
-    pub fn onKey(self: *Window, keycode: u32, mods: u32) void {
-        _ = mods;
-        switch (self.mode) {
-            .normal => switch (keycode) {
-                73 => self.mode = .insert, // i
-                else => {},
-            },
-            .insert => switch (keycode) {
-                27 => self.mode = .normal, // Escape
-                else => {},
-            },
-            .command => switch (keycode) {
-                27 => self.mode = .normal, // Escape
-                else => {},
-            },
-        }
-    }
-
     pub fn onScroll(self: *Window, dx: f32, dy: f32) void {
         _ = dx;
         self.scroll_y = @max(0, self.scroll_y + dy);
