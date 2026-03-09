@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# .git/hooks/pre-push
+# copy to: .git/hooks/pre-push
 # Runs only when pushing to main: builds WASM, assembles dist, force-pushes to gh-pages
 
 set -euo pipefail
