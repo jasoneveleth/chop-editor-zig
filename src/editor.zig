@@ -315,7 +315,7 @@ pub const Editor = struct {
         const font_size: f32 = 14;
         const line_height = font_size * 1.4;
 
-        const pal_w: f32 = @min(600, win.width - 80);
+        const pal_w: f32 = @min(600, @max(win.width - 80, 800));
         const pal_h: f32 = line_height * 1.5;
         const pal_x: f32 = (win.width - pal_w) / 2;
         const pal_y: f32 = 24;
