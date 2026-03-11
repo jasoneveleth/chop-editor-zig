@@ -1,3 +1,4 @@
 .zig-cache/
 web/editor.wasm
 dist/
+.claude/
