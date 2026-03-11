@@ -123,6 +123,7 @@ pub const Editor = struct {
     palette: Palette,
     last_input_ms: f64 = 0,
     dark_mode: bool = true,
+    drag_anchor: ?usize = null,
 
     pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, dark_mode: bool) !Editor {
         var editor = Editor{
@@ -565,15 +566,34 @@ pub const Editor = struct {
     }
 
     pub fn onMouse(self: *Editor, x: f32, y: f32, button: u8, kind: u8, mods: u32) void {
-        if (kind != 1 or button != 0) return; // left mousedown only
         const win = self.getWindow(self.focused_window) orelse return;
         const buf = self.getBuffer(win.buffer_id) orelse return;
         const cs = self.getCursorSet(win.cursor_set_id) orelse return;
-        const pos = posFromPoint(win, buf.bytes(), x, y);
-        win.preferred_col = null;
-        const alt = (mods & @import("key.zig").MOD_ALT) != 0;
-        if (!alt) cs.clear();
-        cs.insert(Cursor.init(pos)) catch {};
+
+        switch (kind) {
+            1 => { // mousedown
+                if (button != 0) return;
+                const pos = posFromPoint(win, buf.bytes(), x, y);
+                win.preferred_col = null;
+                const alt = (mods & @import("key.zig").MOD_ALT) != 0;
+                if (!alt) cs.clear();
+                cs.insert(Cursor.init(pos)) catch {};
+                self.drag_anchor = pos;
+            },
+            0 => { // mousemove
+                const anchor = self.drag_anchor orelse return;
+                const pos = posFromPoint(win, buf.bytes(), x, y);
+                cs.clear();
+                cs.insert(.{
+                    .head = pos,
+                    .offset = @as(i64, @intCast(anchor)) - @as(i64, @intCast(pos)),
+                }) catch {};
+            },
+            2 => { // mouseup
+                self.drag_anchor = null;
+            },
+            else => {},
+        }
     }
 
     pub fn onScroll(self: *Editor, time_ms: f64, dx: f32, dy: f32) void {
