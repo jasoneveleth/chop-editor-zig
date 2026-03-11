@@ -336,6 +336,14 @@ pub const Editor = struct {
 
     const Dir = enum { left, right, up, down };
 
+    fn deleteSelections(self: *Editor, win: *Window, cs: *CursorSet) void {
+        var it = cs.reverseIter();
+        while (it.next()) |cursor| {
+            if (cursor.isSelection())
+                self.bufferDelete(win.buffer_id, cursor.start(), cursor.end() - cursor.start());
+        }
+    }
+
     fn extendSelection(self: *Editor, win: *Window, cs: *CursorSet, dir: Dir) void {
         const buf = self.getBuffer(win.buffer_id) orelse return;
         const content = buf.bytes();
@@ -414,7 +422,10 @@ pub const Editor = struct {
                     },
                     'k' => { cs.clearSelections(); self.move(win, cs, .up); },
                     'j' => { cs.clearSelections(); self.move(win, cs, .down); },
-                    'i' => win.mode = .insert,
+                    'i' => {
+                        if (cs.hasSelection()) self.deleteSelections(win, cs);
+                        win.mode = .insert;
+                    },
                     '/', ':' => self.openPalette() catch {},
                     'y' => self.yank(win, cs),
                     'Y' => self.paste(win, cs),
