@@ -46,6 +46,38 @@ fn cursorRight(content: []const u8, head: usize) usize {
     return grapheme.nextGrapheme(content, head);
 }
 
+fn isWordChar(c: u8) bool {
+    return std.ascii.isAlphanumeric(c) or c == '_';
+}
+
+fn isSTNL(c: u8) bool {
+    return c == ' ' or c == '\t' or c == '\n';
+}
+
+fn wordNext(content: []const u8, pos: usize) usize {
+    var i = pos;
+    if (i >= content.len) return content.len;
+    if (isWordChar(content[i])) {
+        while (i < content.len and isWordChar(content[i])) i += 1;
+    } else if (!isSTNL(content[i])) {
+        while (i < content.len and !isWordChar(content[i]) and !isSTNL(content[i])) i += 1;
+    }
+    while (i < content.len and isSTNL(content[i])) i += 1;
+    return i;
+}
+
+fn wordPrev(content: []const u8, pos: usize) usize {
+    var i = pos;
+    while (i > 0 and isSTNL(content[i-1])) i -= 1;
+    if (i == 0) return 0;
+    if (isWordChar(content[i-1])) {
+        while (i > 0 and isWordChar(content[i-1])) i -= 1;
+    } else {
+        while (i > 0 and !isWordChar(content[i-1]) and !isSTNL(content[i-1])) i -= 1;
+    }
+    return i;
+}
+
 /// Walk graphemes on [line_start, line_end), return the byte offset whose
 /// measured x-position is closest to target_x.
 fn closestPosToX(content: []const u8, line_start: usize, line_end: usize, target_x: f32, font_size: f32) usize {
@@ -422,6 +454,38 @@ pub const Editor = struct {
                     },
                     'k' => { cs.clearSelections(); self.move(win, cs, .up); },
                     'j' => { cs.clearSelections(); self.move(win, cs, .down); },
+                    'w' => {
+                        const buf = self.getBuffer(win.buffer_id) orelse return;
+                        const content = buf.bytes();
+                        for (cs.buf[0..cs.len]) |*c| { c.head = wordNext(content, c.head); c.offset = 0; }
+                        win.preferred_col = null;
+                    },
+                    'W' => {
+                        const buf = self.getBuffer(win.buffer_id) orelse return;
+                        const content = buf.bytes();
+                        for (cs.buf[0..cs.len]) |*c| {
+                            const anch = c.anchor();
+                            c.head = wordNext(content, c.head);
+                            c.offset = @as(i64, @intCast(anch)) - @as(i64, @intCast(c.head));
+                        }
+                        win.preferred_col = null;
+                    },
+                    'b' => {
+                        const buf = self.getBuffer(win.buffer_id) orelse return;
+                        const content = buf.bytes();
+                        for (cs.buf[0..cs.len]) |*c| { c.head = wordPrev(content, c.head); c.offset = 0; }
+                        win.preferred_col = null;
+                    },
+                    'B' => {
+                        const buf = self.getBuffer(win.buffer_id) orelse return;
+                        const content = buf.bytes();
+                        for (cs.buf[0..cs.len]) |*c| {
+                            const anch = c.anchor();
+                            c.head = wordPrev(content, c.head);
+                            c.offset = @as(i64, @intCast(anch)) - @as(i64, @intCast(c.head));
+                        }
+                        win.preferred_col = null;
+                    },
                     'i' => {
                         if (cs.hasSelection()) self.deleteSelections(win, cs);
                         win.mode = .insert;
