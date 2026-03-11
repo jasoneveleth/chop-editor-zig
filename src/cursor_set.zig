@@ -75,14 +75,14 @@ pub const CursorSet = struct {
     }
 
     pub fn clearSelections(self: *CursorSet) void {
-        for (self.buf[0..self.len]) |*c| c.offset = 0;
+        for (self.buf[0..self.len]) |*c| c.anchor = c.head;
     }
 
     pub fn collapseToStart(self: *CursorSet) void {
-        for (self.buf[0..self.len]) |*c| { c.head = c.start(); c.offset = 0; }
+        for (self.buf[0..self.len]) |*c| { c.head = c.start(); c.anchor = c.head; }
     }
 
     pub fn collapseToEnd(self: *CursorSet) void {
-        for (self.buf[0..self.len]) |*c| { c.head = c.end(); c.offset = 0; }
+        for (self.buf[0..self.len]) |*c| { c.head = c.end(); c.anchor = c.head; }
     }
 };

@@ -363,7 +363,7 @@ pub const Editor = struct {
             const pos = cs.buf[idx].head;
             buf_obj.insert(pos, text) catch continue;
             cs.buf[idx].head = pos + (idx+1) * text.len;
-            cs.buf[idx].offset = 0;
+            cs.buf[idx].anchor = cs.buf[idx].head;
         }
     }
 
@@ -382,10 +382,7 @@ pub const Editor = struct {
         const content = buf.bytes();
         win.preferred_col = null;
         for (cs.buf[0..cs.len]) |*c| {
-            const anch = c.anchor();
-            const new_head = if (dir == .left) cursorLeft(content, c.head) else cursorRight(content, c.head);
-            c.head = new_head;
-            c.offset = @as(i64, @intCast(anch)) - @as(i64, @intCast(new_head));
+            c.head = if (dir == .left) cursorLeft(content, c.head) else cursorRight(content, c.head);
         }
     }
 
@@ -426,7 +423,7 @@ pub const Editor = struct {
                     c.head = if (dir == .up) cursorUp(content, c.head, col_px, win.font_size) else cursorDown(content, c.head, col_px, win.font_size);
                 },
             }
-            c.offset = 0;
+            c.anchor = c.head;
         }
     }
 
@@ -458,32 +455,28 @@ pub const Editor = struct {
                     'w' => {
                         const buf = self.getBuffer(win.buffer_id) orelse return;
                         const content = buf.bytes();
-                        for (cs.buf[0..cs.len]) |*c| { c.head = wordNext(content, c.head); c.offset = 0; }
+                        for (cs.buf[0..cs.len]) |*c| { c.head = wordNext(content, c.head); c.anchor = c.head; }
                         win.preferred_col = null;
                     },
                     'W' => {
                         const buf = self.getBuffer(win.buffer_id) orelse return;
                         const content = buf.bytes();
                         for (cs.buf[0..cs.len]) |*c| {
-                            const anch = c.anchor();
                             c.head = wordNext(content, c.head);
-                            c.offset = @as(i64, @intCast(anch)) - @as(i64, @intCast(c.head));
                         }
                         win.preferred_col = null;
                     },
                     'b' => {
                         const buf = self.getBuffer(win.buffer_id) orelse return;
                         const content = buf.bytes();
-                        for (cs.buf[0..cs.len]) |*c| { c.head = wordPrev(content, c.head); c.offset = 0; }
+                        for (cs.buf[0..cs.len]) |*c| { c.head = wordPrev(content, c.head); c.anchor = c.head; }
                         win.preferred_col = null;
                     },
                     'B' => {
                         const buf = self.getBuffer(win.buffer_id) orelse return;
                         const content = buf.bytes();
                         for (cs.buf[0..cs.len]) |*c| {
-                            const anch = c.anchor();
                             c.head = wordPrev(content, c.head);
-                            c.offset = @as(i64, @intCast(anch)) - @as(i64, @intCast(c.head));
                         }
                         win.preferred_col = null;
                     },
@@ -537,14 +530,14 @@ pub const Editor = struct {
                     .arrow_left => {
                         if (pal_cs.len > 0 and pal_cs.buf[0].head > 0) {
                             pal_cs.buf[0].head -= 1;
-                            pal_cs.buf[0].offset = 0;
+                            pal_cs.buf[0].anchor = pal_cs.buf[0].head;
                         }
                     },
                     .arrow_right => {
                         const pal_buf = self.getBuffer(self.palette.buffer_id) orelse return;
                         if (pal_cs.len > 0 and pal_cs.buf[0].head < pal_buf.len()) {
                             pal_cs.buf[0].head += 1;
-                            pal_cs.buf[0].offset = 0;
+                            pal_cs.buf[0].anchor = pal_cs.buf[0].head;
                         }
                     },
                     else => if (key.isPrintable()) {
@@ -586,7 +579,7 @@ pub const Editor = struct {
                 cs.clear();
                 cs.insert(.{
                     .head = pos,
-                    .offset = @as(i64, @intCast(anchor)) - @as(i64, @intCast(pos)),
+                    .anchor = anchor,
                 }) catch {};
             },
             2 => { // mouseup
