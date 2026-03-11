@@ -243,6 +243,17 @@ pub const Editor = struct {
 
         self.palette.matches.clearRetainingCapacity();
         win.mode = .command;
+
+        // Pre-populate with selection text if there's a single selection.
+        if (cs.len == 1 and cs.buf[0].isSelection()) {
+            const main_buf = self.getBuffer(win.buffer_id) orelse return;
+            const c = cs.buf[0];
+            const selected = main_buf.bytes()[c.start()..c.end()];
+            pal_buf.insert(0, selected) catch {};
+            pal_cs.buf[0].head = selected.len;
+            pal_cs.buf[0].anchor = selected.len;
+            self.updateMatches() catch {};
+        }
     }
 
     fn closePalette(self: *Editor, confirm: bool) void {
