@@ -13,6 +13,19 @@ extern fn js_measure_text(ptr: [*]const u8, len: u32, size: f32) f32;
 // Logging
 extern fn js_log(ptr: [*]const u8, len: usize) void;
 extern fn js_panic(ptr: [*]const u8, len: usize) void;
+extern fn js_clipboard_write(ptr: [*]const u8, len: usize) void;
+extern fn js_clipboard_read(out_ptr: [*]u8, max_len: usize) usize;
+
+var clipboard_scratch: [65536]u8 = undefined;
+
+pub fn readClipboard() []u8 {
+    const len = js_clipboard_read(&clipboard_scratch, clipboard_scratch.len);
+    return clipboard_scratch[0..len];
+}
+
+pub fn writeClipboard(text: []const u8) void {
+    js_clipboard_write(text.ptr, text.len);
+}
 
 pub fn panic(msg: []const u8, _: ?*@import("builtin").StackTrace, _: ?usize) noreturn {
     js_log(msg.ptr, msg.len);

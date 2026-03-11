@@ -68,4 +68,21 @@ pub const CursorSet = struct {
     pub fn clear(self: *CursorSet) void {
         self.len = 0;
     }
+
+    pub fn hasSelection(self: *const CursorSet) bool {
+        for (self.buf[0..self.len]) |c| if (c.isSelection()) return true;
+        return false;
+    }
+
+    pub fn clearSelections(self: *CursorSet) void {
+        for (self.buf[0..self.len]) |*c| c.offset = 0;
+    }
+
+    pub fn collapseToStart(self: *CursorSet) void {
+        for (self.buf[0..self.len]) |*c| { c.head = c.start(); c.offset = 0; }
+    }
+
+    pub fn collapseToEnd(self: *CursorSet) void {
+        for (self.buf[0..self.len]) |*c| { c.head = c.end(); c.offset = 0; }
+    }
 };

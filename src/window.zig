@@ -66,6 +66,17 @@ pub const Window = struct {
             if (at_newline or at_end) {
                 const baseline = line_y + self.font_size;
                 if (baseline >= 0 and line_y < self.height) {
+                    // Draw selection highlights.
+                    for (cs.iter()) |cursor| {
+                        if (!cursor.isSelection()) continue;
+                        const ov_s = @max(cursor.start(), line_start);
+                        const ov_e = @min(cursor.end(), i);
+                        if (ov_s >= ov_e) continue;
+                        const hx = gutter_width + platform.measureText(content[line_start..ov_s], self.font_size);
+                        const hw = platform.measureText(content[ov_s..ov_e], self.font_size);
+                        try dl.fillRect(.{ .x = hx, .y = line_y, .w = hw, .h = line_height }, draw.Color.rgba(38, 120, 200, 120));
+                    }
+
                     // Draw match highlights for this line.
                     for (highlights, 0..) |m, mi| {
                         const m_start = @max(m.start, line_start);

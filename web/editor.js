@@ -3,9 +3,13 @@
 const canvas = document.getElementById("c");
 const ctx = canvas.getContext("2d");
 const decoder = new TextDecoder("utf-8");
+const encoder = new TextEncoder();
 
 // WASM linear memory — set once the module is instantiated.
 let memory;
+
+// Clipboard cache — updated on focus and after writes.
+let clipboardText = "";
 
 // ── Canvas helpers ────────────────────────────────────────────────────────────
 
@@ -64,6 +68,18 @@ const imports = {
 
     js_log(ptr, len) {
       console.log(wasmStr(ptr, len));
+    },
+
+    js_clipboard_write(ptr, len) {
+      clipboardText = decoder.decode(new Uint8Array(memory.buffer, ptr, len));
+      navigator.clipboard.writeText(clipboardText).catch(() => {});
+    },
+
+    js_clipboard_read(outPtr, maxLen) {
+      const bytes = encoder.encode(clipboardText);
+      const n = Math.min(bytes.length, maxLen);
+      new Uint8Array(memory.buffer, outPtr, n).set(bytes.subarray(0, n));
+      return n;
     },
   },
 };
@@ -135,6 +151,12 @@ async function main() {
     Math.round(window.innerWidth),
     Math.round(window.innerHeight),
   );
+
+  // Seed clipboard cache and keep it fresh on window focus.
+  navigator.clipboard.readText().then(t => { clipboardText = t; }).catch(() => {});
+  window.addEventListener("focus", () => {
+    navigator.clipboard.readText().then(t => { clipboardText = t; }).catch(() => {});
+  });
 
   // Resize
   window.addEventListener("resize", () => resize(wasm));

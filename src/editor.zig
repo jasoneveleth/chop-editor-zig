@@ -330,6 +330,39 @@ pub const Editor = struct {
 
     const Dir = enum { left, right, up, down };
 
+    fn extendSelection(self: *Editor, win: *Window, cs: *CursorSet, dir: Dir) void {
+        const buf = self.getBuffer(win.buffer_id) orelse return;
+        const content = buf.bytes();
+        win.preferred_col = null;
+        for (cs.buf[0..cs.len]) |*c| {
+            const anch = c.anchor();
+            const new_head = if (dir == .left) cursorLeft(content, c.head) else cursorRight(content, c.head);
+            c.head = new_head;
+            c.offset = @as(i64, @intCast(anch)) - @as(i64, @intCast(new_head));
+        }
+    }
+
+    fn yank(self: *Editor, win: *Window, cs: *CursorSet) void {
+        if (cs.len == 0) return;
+        const buf = self.getBuffer(win.buffer_id) orelse return;
+        const content = buf.bytes();
+        const c = cs.buf[0];
+        if (c.isSelection()) {
+            platform.writeClipboard(content[c.start()..c.end()]);
+        } else {
+            const ls = grapheme.lineStart(content, c.head);
+            const le = grapheme.findChars(content, c.head, "\n");
+            const line_end = if (le < content.len) le + 1 else content.len;
+            platform.writeClipboard(content[ls..line_end]);
+        }
+    }
+
+    fn paste(self: *Editor, win: *Window, cs: *CursorSet) void {
+        cs.clearSelections();
+        const clip = platform.readClipboard();
+        if (clip.len > 0) self.insertAtCursors(win, cs, clip);
+    }
+
     fn move(self: *Editor, win: *Window, cs: *CursorSet, dir: Dir) void {
         const buf = self.getBuffer(win.buffer_id) orelse return;
         const content = buf.bytes();
@@ -363,12 +396,22 @@ pub const Editor = struct {
                 .arrow_up    => self.move(win, cs, .up),
                 .arrow_down  => self.move(win, cs, .down),
                 else => if (key.isPrintable()) switch (@intFromEnum(key)) {
-                    'h' => self.move(win, cs, .left),
-                    'l' => self.move(win, cs, .right),
-                    'k' => self.move(win, cs, .up),
-                    'j' => self.move(win, cs, .down),
+                    'H' => self.extendSelection(win, cs, .left),
+                    'L' => self.extendSelection(win, cs, .right),
+                    'h' => {
+                        if (cs.hasSelection()) { cs.collapseToStart(); win.preferred_col = null; }
+                        else self.move(win, cs, .left);
+                    },
+                    'l' => {
+                        if (cs.hasSelection()) { cs.collapseToEnd(); win.preferred_col = null; }
+                        else self.move(win, cs, .right);
+                    },
+                    'k' => { cs.clearSelections(); self.move(win, cs, .up); },
+                    'j' => { cs.clearSelections(); self.move(win, cs, .down); },
                     'i' => win.mode = .insert,
                     '/', ':' => self.openPalette() catch {},
+                    'y' => self.yank(win, cs),
+                    'Y' => self.paste(win, cs),
                     else => {},
                 },
             },
