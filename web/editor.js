@@ -147,9 +147,15 @@ async function main() {
   canvas.style.height = window.innerHeight + "px";
   ctx.scale(dpr, dpr);
 
+  const darkMQ = window.matchMedia("(prefers-color-scheme: dark)");
+  const isDark = darkMQ.matches ? 1 : 0;
+  darkMQ.addEventListener("change", (e) => {
+    wasm.exports.set_dark_mode(e.matches ? 1 : 0);
+  });
   wasm.exports.init(
     Math.round(window.innerWidth),
     Math.round(window.innerHeight),
+    isDark,
   );
 
   // Seed clipboard cache and keep it fresh on window focus.

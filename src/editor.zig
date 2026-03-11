@@ -90,8 +90,9 @@ pub const Editor = struct {
     focused_window: WindowId,
     palette: Palette,
     last_input_ms: f64 = 0,
+    dark_mode: bool = true,
 
-    pub fn init(allocator: std.mem.Allocator, width: u32, height: u32) !Editor {
+    pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, dark_mode: bool) !Editor {
         var editor = Editor{
             .allocator = allocator,
             .windows = .{},
@@ -100,6 +101,7 @@ pub const Editor = struct {
             .buffer_cursor_sets = std.AutoHashMap(u32, std.ArrayList(CursorSetId)).init(allocator),
             .focused_window = undefined,
             .palette = undefined,
+            .dark_mode = dark_mode,
         };
 
         // Main buffer + cursor set + window.
@@ -257,12 +259,12 @@ pub const Editor = struct {
         const cs = self.getCursorSet(win.cursor_set_id) orelse return;
 
         const highlights: []const Match = if (win.mode == .command) self.palette.matches.items else &.{};
-        try win.buildDrawList(dl, buf, cs, highlights, cursor_visible);
+        try win.buildDrawList(dl, buf, cs, highlights, cursor_visible, self.dark_mode);
 
-        if (win.mode == .command) try self.drawPalette(dl, win);
+        if (win.mode == .command) try self.drawPalette(dl, win, self.dark_mode);
     }
 
-    fn drawPalette(self: *Editor, dl: *draw.DrawList, win: *const Window) !void {
+    fn drawPalette(self: *Editor, dl: *draw.DrawList, win: *const Window, dark_mode: bool) !void {
         const font_size: f32 = 14;
         const line_height = font_size * 1.4;
 
@@ -273,29 +275,33 @@ pub const Editor = struct {
         const baseline = pal_y + pal_h/2 + font_size/3; // should come from font metrics, but eyeballing for now
         const text_x = pal_x + 14;
 
+        const pal_bg    = if (dark_mode) draw.Color.rgb(45, 45, 45)    else draw.Color.rgb(220, 220, 220);
+        const pal_dim   = if (dark_mode) draw.Color.rgb(100, 100, 100) else draw.Color.rgb(130, 130, 130);
+        const pal_text  = if (dark_mode) draw.Color.rgb(220, 220, 220) else draw.Color.rgb(27, 27, 27);
+
         // Box background.
         try dl.fillRect(
             .{ .x = pal_x, .y = pal_y, .w = pal_w, .h = pal_h },
-            draw.Color.rgb(45, 45, 45),
+            pal_bg,
         );
 
         // "/" prompt.
         const prompt = "/";
         const prompt_w = platform.measureText(prompt, font_size);
-        try dl.drawText(text_x, baseline, prompt, draw.Color.rgb(100, 100, 100), font_size);
+        try dl.drawText(text_x, baseline, prompt, pal_dim, font_size);
 
         // Pattern text.
         const pal_buf = self.getBuffer(self.palette.buffer_id) orelse return;
         const pattern = pal_buf.bytes();
         const pat_x = text_x + prompt_w + 6;
-        try dl.drawText(pat_x, baseline, pattern, draw.Color.rgb(220, 220, 220), font_size);
+        try dl.drawText(pat_x, baseline, pattern, pal_text, font_size);
 
         // Match count hint.
         if (self.palette.matches.items.len > 0) {
             var count_buf: [32]u8 = undefined;
             const count_str = std.fmt.bufPrint(&count_buf, "{d} matches", .{self.palette.matches.items.len}) catch "";
             const count_x = pal_x + pal_w - platform.measureText(count_str, font_size) - 14;
-            try dl.drawText(count_x, baseline, count_str, draw.Color.rgb(100, 100, 100), font_size);
+            try dl.drawText(count_x, baseline, count_str, pal_dim, font_size);
         }
 
         // Palette cursor.

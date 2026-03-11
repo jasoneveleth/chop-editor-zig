@@ -45,11 +45,14 @@ pub const Window = struct {
 
     // No deinit — Window owns no heap memory.
 
-    pub fn buildDrawList(self: *Window, dl: *draw.DrawList, buf: *const Buffer, cs: *const CursorSet, highlights: []const Match, cursor_visible: bool) !void {
+    pub fn buildDrawList(self: *Window, dl: *draw.DrawList, buf: *const Buffer, cs: *const CursorSet, highlights: []const Match, cursor_visible: bool, dark_mode: bool) !void {
+        const bg_color   = if (dark_mode) draw.Color.rgb(27, 27, 27)   else draw.Color.rgb(247, 247, 247);
+        const text_color = if (dark_mode) draw.Color.rgb(204, 204, 204) else draw.Color.rgb(27, 27, 27);
+
         // Background
         try dl.fillRect(
             .{ .x = 0, .y = 0, .w = self.width, .h = self.height },
-            draw.Color.rgb(30, 30, 30),
+            bg_color,
         );
 
         const line_height = self.font_size * 1.4;
@@ -94,7 +97,7 @@ pub const Window = struct {
                     try dl.drawText(
                         gutter_width, baseline,
                         content[line_start..i],
-                        draw.Color.rgb(204, 204, 204),
+                        text_color,
                         self.font_size,
                     );
                 }

@@ -9,8 +9,8 @@ const allocator = std.heap.page_allocator;
 var editor: Editor = undefined;
 var initialized = false;
 
-export fn init(width: u32, height: u32) void {
-    editor = Editor.init(allocator, width, height) catch return;
+export fn init(width: u32, height: u32, is_dark: u32) void {
+    editor = Editor.init(allocator, width, height, is_dark != 0) catch return;
     initialized = true;
 }
 
@@ -45,6 +45,11 @@ export fn on_scroll(time_ms: f64, dx: f32, dy: f32) void {
 export fn on_resize(width: u32, height: u32) void {
     if (!initialized) return;
     editor.onResize(width, height);
+}
+
+export fn set_dark_mode(is_dark: u32) void {
+    if (!initialized) return;
+    editor.dark_mode = is_dark != 0;
 }
 
 pub fn panic(msg: []const u8, _: ?*std.builtin.StackTrace, _: ?usize) noreturn {
