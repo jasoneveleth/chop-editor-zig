@@ -10,6 +10,7 @@ const Cursor = @import("cursor.zig").Cursor;
 const Key = @import("key.zig").Key;
 const Palette = @import("palette.zig").Palette;
 const Match = @import("palette.zig").Match;
+const Direction = @import("palette.zig").Direction;
 const platform = @import("platform/web.zig");
 const grapheme = @import("grapheme.zig");
 
@@ -112,6 +113,33 @@ fn cursorDown(content: []const u8, head: usize, col_px: f32, font_size: f32) usi
     return closestPosToX(content, next_ls, next_le, col_px, font_size);
 }
 
+/// First match with start >= from; wraps to first if none found.
+fn findNextMatchFrom(matches: []const Match, from: usize) ?Match {
+    for (matches) |m| if (m.start >= from) return m;
+    if (matches.len > 0) return matches[0];
+    return null;
+}
+
+/// Last match with end <= from; wraps to last if none found.
+fn findPrevMatchFrom(matches: []const Match, from: usize) ?Match {
+    var i = matches.len;
+    while (i > 0) {
+        i -= 1;
+        if (matches[i].end <= from) return matches[i];
+    }
+    if (matches.len > 0) return matches[matches.len - 1];
+    return null;
+}
+
+fn wordBoundsAt(content: []const u8, pos: usize) ?struct { start: usize, end: usize } {
+    if (pos >= content.len or !isWordChar(content[pos])) return null;
+    var s = pos;
+    while (s > 0 and isWordChar(content[s - 1])) s -= 1;
+    var e = pos + 1;
+    while (e < content.len and isWordChar(content[e])) e += 1;
+    return .{ .start = s, .end = e };
+}
+
 pub const Editor = struct {
     allocator: std.mem.Allocator,
     windows: std.ArrayList(Window),
@@ -212,6 +240,8 @@ pub const Editor = struct {
                 if (self.getCursorSet(cs_id)) |cs| cs.adjustForInsert(pos, text.len);
             }
         }
+        if (@as(u32, @bitCast(buffer_id)) != @as(u32, @bitCast(self.palette.buffer_id)))
+            self.palette.matches_stale = true;
     }
 
     /// Delete from a buffer and fan out cursor adjustments to all watching cursor sets.
@@ -224,14 +254,17 @@ pub const Editor = struct {
                 if (self.getCursorSet(cs_id)) |cs| cs.adjustForDelete(pos, len);
             }
         }
+        if (@as(u32, @bitCast(buffer_id)) != @as(u32, @bitCast(self.palette.buffer_id)))
+            self.palette.matches_stale = true;
     }
 
     // ── Search ────────────────────────────────────────────────────────────────
 
-    fn openPalette(self: *Editor) !void {
+    fn openPalette(self: *Editor, direction: Direction) !void {
         const win = self.getWindow(self.focused_window) orelse return;
         const cs = self.getCursorSet(win.cursor_set_id) orelse return;
 
+        self.palette.direction = direction;
         self.palette.saved_cursors = cs.*;
 
         const pal_buf = self.getBuffer(self.palette.buffer_id) orelse return;
@@ -262,17 +295,28 @@ pub const Editor = struct {
         const cs = self.getCursorSet(win.cursor_set_id) orelse return;
 
         if (confirm and self.palette.matches.items.len > 0) {
-            const first = self.palette.matches.items[0];
+            const saved_head = if (self.palette.saved_cursors.len > 0) self.palette.saved_cursors.buf[0].head else 0;
+            const m = if (self.palette.direction == .forward)
+                findNextMatchFrom(self.palette.matches.items, saved_head) orelse self.palette.matches.items[0]
+            else
+                findPrevMatchFrom(self.palette.matches.items, saved_head) orelse self.palette.matches.items[self.palette.matches.items.len - 1];
             cs.clear();
-            cs.insert(Cursor.init(first.start)) catch {};
+            cs.insert(.{ .head = m.end, .anchor = m.start }) catch {};
+            // Keep matches alive for n/p/N/P navigation.
         } else {
             cs.* = self.palette.saved_cursors;
+            self.palette.matches.clearRetainingCapacity();
         }
+    }
 
-        self.palette.matches.clearRetainingCapacity();
+    fn requireFreshMatches(self: *Editor) void {
+        if (self.palette.matches_stale) {
+            self.updateMatches() catch {};
+        }
     }
 
     fn updateMatches(self: *Editor) !void {
+        self.palette.matches_stale = false;
         self.palette.matches.clearRetainingCapacity();
         const win = self.getWindow(self.focused_window) orelse return;
         const pal_buf = self.getBuffer(self.palette.buffer_id) orelse return;
@@ -329,8 +373,8 @@ pub const Editor = struct {
             pal_bg,
         );
 
-        // "/" prompt.
-        const prompt = "/";
+        // "/" or "?" prompt.
+        const prompt = if (self.palette.direction == .forward) "/" else "?";
         const prompt_w = platform.measureText(prompt, font_size);
         try dl.drawText(text_x, baseline, prompt, pal_dim, font_size);
 
@@ -495,7 +539,63 @@ pub const Editor = struct {
                         if (cs.hasSelection()) self.deleteSelections(win, cs);
                         win.mode = .insert;
                     },
-                    '/', ':' => self.openPalette() catch {},
+                    '/' => self.openPalette(.forward) catch {},
+                    '?' => self.openPalette(.backward) catch {},
+                    ':' => self.openPalette(.forward) catch {},
+                    'n' => {
+                        self.requireFreshMatches();
+                        if (self.palette.matches.items.len == 0 or cs.len == 0) return;
+                        const m = findNextMatchFrom(self.palette.matches.items, cs.buf[cs.len - 1].end()) orelse return;
+                        cs.clear();
+                        cs.insert(.{ .head = m.end, .anchor = m.start }) catch {};
+                        win.preferred_col = null;
+                    },
+                    'N' => {
+                        self.requireFreshMatches();
+                        if (self.palette.matches.items.len == 0 or cs.len == 0) return;
+                        const m = findNextMatchFrom(self.palette.matches.items, cs.buf[cs.len - 1].end()) orelse return;
+                        cs.insert(.{ .head = m.end, .anchor = m.start }) catch {};
+                        win.preferred_col = null;
+                    },
+                    'p' => {
+                        self.requireFreshMatches();
+                        if (self.palette.matches.items.len == 0 or cs.len == 0) return;
+                        const m = findPrevMatchFrom(self.palette.matches.items, cs.buf[0].start()) orelse return;
+                        cs.clear();
+                        cs.insert(.{ .head = m.end, .anchor = m.start }) catch {};
+                        win.preferred_col = null;
+                    },
+                    'P' => {
+                        self.requireFreshMatches();
+                        if (self.palette.matches.items.len == 0 or cs.len == 0) return;
+                        const m = findPrevMatchFrom(self.palette.matches.items, cs.buf[0].start()) orelse return;
+                        cs.insert(.{ .head = m.end, .anchor = m.start }) catch {};
+                        win.preferred_col = null;
+                    },
+                    '*' => {
+                        if (cs.len == 0) return;
+                        self.requireFreshMatches();
+                        const buf = self.getBuffer(win.buffer_id) orelse return;
+                        const content = buf.bytes();
+                        if (self.palette.matches.items.len == 0) {
+                            if (wordBoundsAt(content, cs.buf[0].head)) |wb| {
+                                const pal_buf = self.getBuffer(self.palette.buffer_id) orelse return;
+                                if (pal_buf.len() > 0) self.bufferDelete(self.palette.buffer_id, 0, pal_buf.len());
+                                const word = content[wb.start..wb.end];
+                                self.bufferInsert(self.palette.buffer_id, 0, word) catch return;
+                                const pal_cs = self.getCursorSet(self.palette.cursor_set_id) orelse return;
+                                if (pal_cs.len > 0) { pal_cs.buf[0].head = word.len; pal_cs.buf[0].anchor = word.len; }
+                                self.updateMatches() catch return;
+                            }
+                        }
+                        if (self.palette.matches.items.len > 0) {
+                            cs.clear();
+                            for (self.palette.matches.items) |m| {
+                                cs.insert(.{ .head = m.end, .anchor = m.start }) catch break;
+                            }
+                        }
+                        win.preferred_col = null;
+                    },
                     'y' => self.yank(win, cs),
                     'Y' => self.paste(win, cs),
                     else => {},

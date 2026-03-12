@@ -8,6 +8,8 @@ pub const Match = struct {
     end: usize,
 };
 
+pub const Direction = enum { forward, backward };
+
 pub const Palette = struct {
     buffer_id: BufferId,
     cursor_set_id: CursorSetId,
@@ -15,6 +17,8 @@ pub const Palette = struct {
     saved_cursors: CursorSet,
     /// All match positions in the focused buffer, recomputed on each keystroke.
     matches: std.ArrayList(Match),
+    matches_stale: bool = false,
+    direction: Direction = .forward,
 
     pub fn init(buffer_id: BufferId, cursor_set_id: CursorSetId) Palette {
         return .{
