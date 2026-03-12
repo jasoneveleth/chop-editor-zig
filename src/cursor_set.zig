@@ -21,11 +21,11 @@ pub const ReverseIter = struct {
 
 pub const CursorSet = struct {
     buffer_id: BufferId,
-    buf: [MAX_CURSORS]Cursor,
+    items: [MAX_CURSORS]Cursor,
     len: usize,
 
     pub fn init(buffer_id: BufferId) CursorSet {
-        return .{ .buffer_id = buffer_id, .buf = undefined, .len = 0 };
+        return .{ .buffer_id = buffer_id, .items = undefined, .len = 0 };
     }
 
     /// Insert a cursor maintaining sort order by start(). Returns error if at capacity.
@@ -36,7 +36,7 @@ pub const CursorSet = struct {
         var hi: usize = self.len;
         while (lo < hi) {
             const mid = lo + (hi - lo) / 2;
-            if (self.buf[mid].start() <= cursor.start()) {
+            if (self.items[mid].start() <= cursor.start()) {
                 lo = mid + 1;
             } else {
                 hi = mid;
@@ -44,25 +44,25 @@ pub const CursorSet = struct {
         }
         // Shift elements right to make room.
         var i: usize = self.len;
-        while (i > lo) : (i -= 1) self.buf[i] = self.buf[i - 1];
-        self.buf[lo] = cursor;
+        while (i > lo) : (i -= 1) self.items[i] = self.items[i - 1];
+        self.items[lo] = cursor;
         self.len += 1;
     }
 
     pub fn iter(self: *const CursorSet) []const Cursor {
-        return self.buf[0..self.len];
+        return self.items[0..self.len];
     }
 
     pub fn reverseIter(self: *const CursorSet) ReverseIter {
-        return .{ .slice = self.buf[0..self.len], .index = self.len };
+        return .{ .slice = self.items[0..self.len], .index = self.len };
     }
 
     pub fn adjustForInsert(self: *CursorSet, pos: usize, len: usize) void {
-        for (self.buf[0..self.len]) |*cursor| cursor.adjustForInsert(pos, len);
+        for (self.items[0..self.len]) |*cursor| cursor.adjustForInsert(pos, len);
     }
 
     pub fn adjustForDelete(self: *CursorSet, pos: usize, len: usize) void {
-        for (self.buf[0..self.len]) |*cursor| cursor.adjustForDelete(pos, len);
+        for (self.items[0..self.len]) |*cursor| cursor.adjustForDelete(pos, len);
     }
 
     pub fn clear(self: *CursorSet) void {
@@ -70,19 +70,25 @@ pub const CursorSet = struct {
     }
 
     pub fn hasSelection(self: *const CursorSet) bool {
-        for (self.buf[0..self.len]) |c| if (c.isSelection()) return true;
+        for (self.items[0..self.len]) |c| if (c.isSelection()) return true;
         return false;
     }
 
     pub fn clearSelections(self: *CursorSet) void {
-        for (self.buf[0..self.len]) |*c| c.anchor = c.head;
+        for (self.items[0..self.len]) |*c| c.anchor = c.head;
     }
 
     pub fn collapseToStart(self: *CursorSet) void {
-        for (self.buf[0..self.len]) |*c| { c.head = c.start(); c.anchor = c.head; }
+        for (self.items[0..self.len]) |*c| {
+            c.head = c.start();
+            c.anchor = c.head;
+        }
     }
 
     pub fn collapseToEnd(self: *CursorSet) void {
-        for (self.buf[0..self.len]) |*c| { c.head = c.end(); c.anchor = c.head; }
+        for (self.items[0..self.len]) |*c| {
+            c.head = c.end();
+            c.anchor = c.head;
+        }
     }
 };
