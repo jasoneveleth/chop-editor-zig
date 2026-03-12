@@ -456,6 +456,24 @@ pub const Editor = struct {
         }
     }
 
+    fn cut(self: *Editor, win: *Window, cs: *CursorSet) void {
+        if (cs.len == 0) return;
+        const buf = self.getBuffer(win.buffer_id) orelse return;
+        const content = buf.bytes();
+        const c = cs.items[0];
+        if (c.isSelection()) {
+            platform.writeClipboard(content[c.start()..c.end()]);
+            self.deleteSelections(win, cs);
+            cs.clearSelections();
+        } else {
+            const ls = grapheme.lineStart(content, c.head);
+            const le = grapheme.findChars(content, c.head, "\n");
+            const line_end = if (le < content.len) le + 1 else content.len;
+            platform.writeClipboard(content[ls..line_end]);
+            self.bufferDelete(win.buffer_id, ls, line_end - ls);
+        }
+    }
+
     fn paste(self: *Editor, win: *Window, cs: *CursorSet) void {
         cs.clearSelections();
         const clip = platform.readClipboard();
@@ -615,6 +633,7 @@ pub const Editor = struct {
                         }
                         win.preferred_col = null;
                     },
+                    'd' => self.cut(win, cs),
                     'y' => self.yank(win, cs),
                     'Y' => self.paste(win, cs),
                     else => {},
