@@ -507,12 +507,66 @@ pub const Editor = struct {
         const cs = self.getCursorSet(win.cursor_set_id) orelse return;
         switch (win.mode) {
             .normal => switch (key) {
-                .escape => {},
+                .escape => { win.pending_key = null; },
                 .arrow_left => self.move(win, cs, .left),
                 .arrow_right => self.move(win, cs, .right),
                 .arrow_up => self.move(win, cs, .up),
                 .arrow_down => self.move(win, cs, .down),
-                else => if (key.isPrintable()) switch (@intFromEnum(key)) {
+                else => if (key.isPrintable()) {
+                    if (win.pending_key) |pending| {
+                        win.pending_key = null;
+                        const buf = self.getBuffer(win.buffer_id) orelse return;
+                        const content = buf.bytes();
+                        switch (pending) {
+                            'g' => switch (@intFromEnum(key)) {
+                                'h' => {
+                                    for (cs.items[0..cs.len]) |*c| {
+                                        c.head = grapheme.lineStart(content, c.head);
+                                        c.anchor = c.head;
+                                    }
+                                    win.preferred_col = null;
+                                },
+                                'l' => {
+                                    for (cs.items[0..cs.len]) |*c| {
+                                        c.head = grapheme.findChars(content, c.head, "\n");
+                                        c.anchor = c.head;
+                                    }
+                                    win.preferred_col = null;
+                                },
+                                'k' => {
+                                    const first_line_end = grapheme.findChars(content, 0, "\n");
+                                    for (cs.items[0..cs.len]) |*c| {
+                                        const ls = grapheme.lineStart(content, c.head);
+                                        const col_px = win.preferred_col orelse platform.measureText(content[ls..c.head], win.font_size);
+                                        win.preferred_col = col_px;
+                                        c.head = closestPosToX(content, 0, first_line_end, col_px, win.font_size);
+                                        c.anchor = c.head;
+                                    }
+                                },
+                                'j' => {
+                                    var last_ls: usize = 0;
+                                    for (content, 0..) |ch, i| {
+                                        if (ch == '\n') last_ls = i + 1;
+                                    }
+                                    for (cs.items[0..cs.len]) |*c| {
+                                        const ls = grapheme.lineStart(content, c.head);
+                                        const col_px = win.preferred_col orelse platform.measureText(content[ls..c.head], win.font_size);
+                                        win.preferred_col = col_px;
+                                        c.head = closestPosToX(content, last_ls, content.len, col_px, win.font_size);
+                                        c.anchor = c.head;
+                                    }
+                                },
+                                else => {},
+                            },
+                            'c' => switch (@intFromEnum(key)) {
+                                'd' => {
+                                    if (cs.len > 1) cs.len = 1;
+                                },
+                                else => {},
+                            },
+                            else => {},
+                        }
+                    } else switch (@intFromEnum(key)) {
                     'H' => self.extendSelection(win, cs, .left),
                     'L' => self.extendSelection(win, cs, .right),
                     'h' => {
@@ -672,8 +726,10 @@ pub const Editor = struct {
                     'd' => self.cut(win, cs),
                     'y' => self.yank(win, cs),
                     'Y' => self.paste(win, cs),
+                    'g', 'c' => { win.pending_key = @intCast(@intFromEnum(key)); },
                     else => {},
-                },
+                    } // end single-key switch
+                }, // end pending_key else / isPrintable block
             },
             .insert => switch (key) {
                 .escape => win.mode = .normal,
