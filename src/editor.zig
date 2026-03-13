@@ -612,10 +612,16 @@ pub const Editor = struct {
                         const buf = self.getBuffer(win.buffer_id) orelse return;
                         const content = buf.bytes();
                         if (self.palette.matches.items.len == 0) {
-                            if (wordBoundsAt(content, cs.items[0].head)) |wb| {
+                            const c0 = cs.items[0];
+                            const term: ?[]const u8 = if (c0.isSelection())
+                                content[c0.start()..c0.end()]
+                            else if (wordBoundsAt(content, c0.head)) |wb|
+                                content[wb.start..wb.end]
+                            else
+                                null;
+                            if (term) |word| {
                                 const pal_buf = self.getBuffer(self.palette.buffer_id) orelse return;
                                 if (pal_buf.len() > 0) self.bufferDelete(self.palette.buffer_id, 0, pal_buf.len());
-                                const word = content[wb.start..wb.end];
                                 self.bufferInsert(self.palette.buffer_id, 0, word) catch return;
                                 const pal_cs = self.getCursorSet(self.palette.cursor_set_id) orelse return;
                                 if (pal_cs.len > 0) {
