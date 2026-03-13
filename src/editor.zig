@@ -8,6 +8,7 @@ const CursorSet = @import("cursor_set.zig").CursorSet;
 const CursorSetId = @import("cursor_set.zig").CursorSetId;
 const Cursor = @import("cursor.zig").Cursor;
 const Key = @import("key.zig").Key;
+const MOD_CTRL = @import("key.zig").MOD_CTRL;
 const Palette = @import("palette.zig").Palette;
 const Match = @import("palette.zig").Match;
 const Direction = @import("palette.zig").Direction;
@@ -501,7 +502,6 @@ pub const Editor = struct {
     }
 
     pub fn onKeyDown(self: *Editor, time_ms: f64, key: Key, mods: u32) void {
-        _ = mods;
         self.last_input_ms = time_ms;
         const win = self.getWindow(self.focused_window) orelse return;
         const cs = self.getCursorSet(win.cursor_set_id) orelse return;
@@ -693,7 +693,17 @@ pub const Editor = struct {
                     win.preferred_col = null;
                     self.insertAtCursors(win, cs, "\n");
                 },
-                else => if (key.isPrintable()) {
+                else => if (key.isPrintable() and mods & MOD_CTRL != 0 and @intFromEnum(key) == 'w') {
+                    win.preferred_col = null;
+                    const buf = self.getBuffer(win.buffer_id) orelse return;
+                    const content = buf.bytes();
+                    var it = cs.reverseIter();
+                    while (it.next()) |cursor| {
+                        const prev = wordPrev(content, cursor.head);
+                        if (prev < cursor.head)
+                            self.bufferDelete(win.buffer_id, prev, cursor.head - prev);
+                    }
+                } else if (key.isPrintable()) {
                     win.preferred_col = null;
                     var encoded: [4]u8 = undefined;
                     const cp: u21 = @intCast(@intFromEnum(key));
