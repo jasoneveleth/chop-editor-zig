@@ -567,6 +567,13 @@ pub const Editor = struct {
                                         c.anchor = c.head;
                                     }
                                 },
+                                'c' => {
+                                    for (cs.items[0..cs.len]) |*c| {
+                                        const tmp = c.head;
+                                        c.head = c.anchor;
+                                        c.anchor = tmp;
+                                    }
+                                },
                                 else => {},
                             },
                             else => {},
