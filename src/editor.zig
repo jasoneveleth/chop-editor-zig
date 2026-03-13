@@ -628,6 +628,36 @@ pub const Editor = struct {
                                     }
                                     win.preferred_col = null;
                                 },
+                                'p' => {
+                                    for (cs.items[0..cs.len]) |*c| {
+                                        // seek backward past non-blank lines to paragraph start
+                                        var s = grapheme.lineStart(content, c.head);
+                                        while (s > 0) {
+                                            const prev_le = s - 1;
+                                            const prev_ls = grapheme.lineStart(content, prev_le);
+                                            if (prev_ls == prev_le) break; // blank line
+                                            s = prev_ls;
+                                        }
+                                        // seek forward past non-blank lines to paragraph end
+                                        var e = c.head;
+                                        while (e < content.len) {
+                                            const le = grapheme.findChars(content, e, "\n");
+                                            if (le == grapheme.lineStart(content, e)) break; // blank line
+                                            e = if (le < content.len) le + 1 else content.len;
+                                        }
+                                        c.anchor = s;
+                                        c.head = e;
+                                    }
+                                    win.preferred_col = null;
+                                },
+                                'e' => {
+                                    if (cs.len > 0) {
+                                        cs.items[0].anchor = 0;
+                                        cs.items[0].head = content.len;
+                                        cs.len = 1;
+                                    }
+                                    win.preferred_col = null;
+                                },
                                 else => {},
                             },
                             'A' => switch (@intFromEnum(key)) {
