@@ -639,6 +639,36 @@ pub const Editor = struct {
                         }
                         win.preferred_col = null;
                     },
+                    'o' => {
+                        if (cs.len == 0) return;
+                        var idx = cs.len;
+                        const buf = self.getBuffer(win.buffer_id) orelse return;
+                        while (idx > 0) {
+                            idx -= 1;
+                            const c = &cs.items[idx];
+                            const line_end = grapheme.findChars(buf.bytes(), c.head, "\n");
+                            self.bufferInsert(win.buffer_id, line_end, "\n") catch continue;
+                            c.head = line_end + 1;
+                            c.anchor = c.head;
+                        }
+                        win.mode = .insert;
+                        win.preferred_col = null;
+                    },
+                    'O' => {
+                        if (cs.len == 0) return;
+                        var idx = cs.len;
+                        const buf = self.getBuffer(win.buffer_id) orelse return;
+                        while (idx > 0) {
+                            idx -= 1;
+                            const c = &cs.items[idx];
+                            const line_start = grapheme.lineStart(buf.bytes(), c.head);
+                            self.bufferInsert(win.buffer_id, line_start, "\n") catch continue;
+                            c.head = line_start;
+                            c.anchor = c.head;
+                        }
+                        win.mode = .insert;
+                        win.preferred_col = null;
+                    },
                     'd' => self.cut(win, cs),
                     'y' => self.yank(win, cs),
                     'Y' => self.paste(win, cs),
