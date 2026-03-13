@@ -132,6 +132,48 @@ fn findPrevMatchFrom(matches: []const Match, from: usize) ?Match {
     return null;
 }
 
+fn quoteBounds(content: []const u8, pos: usize, quote: u8) ?struct { start: usize, end: usize } {
+    // search backward for opening quote
+    var s = pos;
+    while (true) {
+        if (s == 0) return null;
+        s -= 1;
+        if (content[s] == quote) break;
+    }
+    // search forward for closing quote
+    var e = pos;
+    while (e < content.len and content[e] != quote) e += 1;
+    if (e >= content.len) return null;
+    return .{ .start = s, .end = e };
+}
+
+fn parenBounds(content: []const u8, pos: usize, open: u8, close: u8) ?struct { start: usize, end: usize } {
+    // search backward for opening paren (tracking nesting)
+    var depth: usize = 0;
+    var s = pos;
+    while (true) {
+        if (s == 0) return null;
+        s -= 1;
+        if (content[s] == close) depth += 1
+        else if (content[s] == open) {
+            if (depth == 0) break;
+            depth -= 1;
+        }
+    }
+    // search forward for matching closing paren
+    depth = 0;
+    var e = pos;
+    while (e < content.len) : (e += 1) {
+        if (content[e] == open) depth += 1
+        else if (content[e] == close) {
+            if (depth == 0) break;
+            depth -= 1;
+        }
+    }
+    if (e >= content.len) return null;
+    return .{ .start = s, .end = e };
+}
+
 fn wordBoundsAt(content: []const u8, pos: usize) ?struct { start: usize, end: usize } {
     if (pos >= content.len or !isWordChar(content[pos])) return null;
     var s = pos;
@@ -558,6 +600,48 @@ pub const Editor = struct {
                                 },
                                 else => {},
                             },
+                            'a' => switch (@intFromEnum(key)) {
+                                'w' => {
+                                    for (cs.items[0..cs.len]) |*c| {
+                                        if (wordBoundsAt(content, c.head)) |wb| {
+                                            c.anchor = wb.start;
+                                            c.head = wb.end;
+                                        }
+                                    }
+                                    win.preferred_col = null;
+                                },
+                                '\'' => {
+                                    for (cs.items[0..cs.len]) |*c| {
+                                        if (quoteBounds(content, c.head, '\'')) |qb| {
+                                            c.anchor = qb.start + 1;
+                                            c.head = qb.end;
+                                        }
+                                    }
+                                    win.preferred_col = null;
+                                },
+                                '(', ')' => {
+                                    for (cs.items[0..cs.len]) |*c| {
+                                        if (parenBounds(content, c.head, '(', ')')) |pb| {
+                                            c.anchor = pb.start + 1;
+                                            c.head = pb.end;
+                                        }
+                                    }
+                                    win.preferred_col = null;
+                                },
+                                else => {},
+                            },
+                            'A' => switch (@intFromEnum(key)) {
+                                '\'' => {
+                                    for (cs.items[0..cs.len]) |*c| {
+                                        if (quoteBounds(content, c.head, '\'')) |qb| {
+                                            c.anchor = qb.start;
+                                            c.head = qb.end + 1;
+                                        }
+                                    }
+                                    win.preferred_col = null;
+                                },
+                                else => {},
+                            },
                             'c' => switch (@intFromEnum(key)) {
                                 'd' => {
                                     if (cs.len > 1) cs.len = 1;
@@ -738,7 +822,7 @@ pub const Editor = struct {
                     'd' => self.cut(win, cs),
                     'y' => self.yank(win, cs),
                     'Y' => self.paste(win, cs),
-                    'g', 'c' => { win.pending_key = @intCast(@intFromEnum(key)); },
+                    'g', 'c', 'a', 'A' => { win.pending_key = @intCast(@intFromEnum(key)); },
                     else => {},
                     } // end single-key switch
                 }, // end pending_key else / isPrintable block
