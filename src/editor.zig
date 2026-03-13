@@ -768,7 +768,7 @@ pub const Editor = struct {
                 const alt = (mods & @import("key.zig").MOD_ALT) != 0;
                 if (!alt) cs.clear();
                 cs.insert(Cursor.init(pos)) catch {};
-                self.drag_anchor = pos;
+                if (!alt) self.drag_anchor = pos;
             },
             0 => { // mousemove
                 const anchor = self.drag_anchor orelse return;
