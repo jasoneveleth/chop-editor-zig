@@ -9,6 +9,7 @@ const CursorSetId = @import("cursor_set.zig").CursorSetId;
 const Cursor = @import("cursor.zig").Cursor;
 const Key = @import("key.zig").Key;
 const MOD_CTRL = @import("key.zig").MOD_CTRL;
+const MOD_SHIFT = @import("key.zig").MOD_SHIFT;
 const Palette = @import("palette.zig").Palette;
 const Match = @import("palette.zig").Match;
 const Direction = @import("palette.zig").Direction;
@@ -554,6 +555,28 @@ pub const Editor = struct {
                 .arrow_right => self.move(win, cs, .right),
                 .arrow_up => self.move(win, cs, .up),
                 .arrow_down => self.move(win, cs, .down),
+                .backspace => {
+                    win.preferred_col = null;
+                    const buf = self.getBuffer(win.buffer_id) orelse return;
+                    const content = buf.bytes();
+                    if (mods & MOD_SHIFT != 0) {
+                        // delete char after cursor
+                        var it = cs.reverseIter();
+                        while (it.next()) |cursor| {
+                            const next = cursorRight(content, cursor.head);
+                            if (next > cursor.head)
+                                self.bufferDelete(win.buffer_id, cursor.head, next - cursor.head);
+                        }
+                    } else {
+                        // delete char before cursor
+                        var it = cs.reverseIter();
+                        while (it.next()) |cursor| {
+                            const prev = cursorLeft(content, cursor.head);
+                            if (prev < cursor.head)
+                                self.bufferDelete(win.buffer_id, prev, cursor.head - prev);
+                        }
+                    }
+                },
                 else => if (key.isPrintable()) {
                     if (win.pending_key) |pending| {
                         win.pending_key = null;
@@ -852,6 +875,15 @@ pub const Editor = struct {
                     'd' => self.cut(win, cs),
                     'y' => self.yank(win, cs),
                     'Y' => self.paste(win, cs),
+                    '\'' => {
+                        const buf = self.getBuffer(win.buffer_id) orelse return;
+                        const content = buf.bytes();
+                        for (cs.items[0..cs.len]) |*c| {
+                            c.head = grapheme.findChars(content, c.head, "\n");
+                            c.anchor = c.head;
+                        }
+                        win.preferred_col = null;
+                    },
                     'g', 'c', 'a', 'A' => { win.pending_key = @intCast(@intFromEnum(key)); },
                     else => {},
                     } // end single-key switch
