@@ -776,6 +776,16 @@ pub const Editor = struct {
                         if (cs.hasSelection()) self.deleteSelections(win, cs);
                         win.mode = .insert;
                     },
+                    'I' => {
+                        const buf = self.getBuffer(win.buffer_id) orelse return;
+                        const content = buf.bytes();
+                        for (cs.items[0..cs.len]) |*c| {
+                            c.head = grapheme.lineStart(content, c.head);
+                            c.anchor = c.head;
+                        }
+                        win.preferred_col = null;
+                        win.mode = .insert;
+                    },
                     '/' => self.openPalette(.forward) catch {},
                     '?' => self.openPalette(.backward) catch {},
                     ':' => self.openPalette(.forward) catch {},
