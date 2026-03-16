@@ -14,7 +14,6 @@ const MOD_SHIFT = @import("key.zig").MOD_SHIFT;
 const MOD_ALT = @import("key.zig").MOD_ALT;
 const Palette = @import("palette.zig").Palette;
 const Match = @import("palette.zig").Match;
-const Direction = @import("palette.zig").Direction;
 const PaletteIntent = @import("palette.zig").PaletteIntent;
 const platform = @import("platform/web.zig");
 const grapheme = @import("grapheme.zig");
@@ -329,11 +328,11 @@ pub const Editor = struct {
 
     // ── Search ────────────────────────────────────────────────────────────────
 
-    fn openPalette(self: *Editor, direction: Direction) !void {
+    fn openPalette(self: *Editor, intent: PaletteIntent) !void {
         const win = self.getWindow(self.focused_window) orelse return;
         const cs = self.getCursorSet(win.cursor_set_id) orelse return;
 
-        self.palette.direction = direction;
+        self.palette.intent = intent;
         self.palette.saved_cursors = cs.*;
 
         const pal_buf = self.getBuffer(self.palette.buffer_id) orelse return;
@@ -442,6 +441,49 @@ pub const Editor = struct {
         if (cs.len == 0) cs.* = saved;
     }
 
+    fn openPaletteForFilter(self: *Editor, keep: bool) !void {
+        const win = self.getWindow(self.focused_window) orelse return;
+        const cs = self.getCursorSet(win.cursor_set_id) orelse return;
+        if (!cs.hasSelection()) return;
+
+        self.palette.intent = if (keep) .filter_keep else .filter_drop;
+        self.palette.saved_cursors = cs.*;
+
+        const pal_buf = self.getBuffer(self.palette.buffer_id) orelse return;
+        if (pal_buf.len() > 0) self.bufferDelete(self.palette.buffer_id, 0, pal_buf.len());
+
+        const pal_cs = self.getCursorSet(self.palette.cursor_set_id) orelse return;
+        pal_cs.clear();
+        try pal_cs.insert(Cursor.init(0));
+
+        self.palette.matches.clearRetainingCapacity();
+        win.mode = .command;
+    }
+
+    fn applyFilter(self: *Editor, keep: bool) void {
+        const win = self.getWindow(self.focused_window) orelse return;
+        const cs = self.getCursorSet(win.cursor_set_id) orelse return;
+        const buf = self.getBuffer(win.buffer_id) orelse return;
+        const content = buf.bytes();
+        const pal_buf = self.getBuffer(self.palette.buffer_id) orelse return;
+        const pattern = pal_buf.bytes();
+
+        const saved = self.palette.saved_cursors;
+        cs.clear();
+
+        for (saved.items[0..saved.len]) |cursor| {
+            if (!cursor.isSelection()) continue;
+            const sel_start = cursor.start();
+            const sel_end   = cursor.end();
+            const sel_text  = content[sel_start..sel_end];
+            const matches = if (pattern.len == 0) false else std.mem.indexOf(u8, sel_text, pattern) != null;
+            const include = if (keep) matches else !matches;
+            if (include) cs.insert(cursor) catch break;
+        }
+
+        if (cs.len == 0) cs.* = saved;
+    }
+
     fn closePalette(self: *Editor, confirm: bool) void {
         const win = self.getWindow(self.focused_window) orelse return;
         win.mode = .normal;
@@ -449,10 +491,10 @@ pub const Editor = struct {
 
         if (confirm) {
             switch (self.palette.intent) {
-                .search => {
+                .search_forward, .search_backward => {
                     if (self.palette.matches.items.len > 0) {
                         const saved_head = if (self.palette.saved_cursors.len > 0) self.palette.saved_cursors.items[0].head else 0;
-                        const m = if (self.palette.direction == .forward)
+                        const m = if (self.palette.intent == .search_forward)
                             findNextMatchFrom(self.palette.matches.items, saved_head) orelse self.palette.matches.items[0]
                         else
                             findPrevMatchFrom(self.palette.matches.items, saved_head) orelse self.palette.matches.items[self.palette.matches.items.len - 1];
@@ -467,17 +509,29 @@ pub const Editor = struct {
                 .split => {
                     self.applySplit();
                     self.palette.matches.clearRetainingCapacity();
+                    self.palette.intent = .search_forward;
                 },
                 .split_complement => {
                     self.applySplitComplement();
                     self.palette.matches.clearRetainingCapacity();
+                    self.palette.intent = .search_forward;
+                },
+                .filter_keep => {
+                    self.applyFilter(true);
+                    self.palette.matches.clearRetainingCapacity();
+                    self.palette.intent = .search_forward;
+                },
+                .filter_drop => {
+                    self.applyFilter(false);
+                    self.palette.matches.clearRetainingCapacity();
+                    self.palette.intent = .search_forward;
                 },
             }
         } else {
             cs.* = self.palette.saved_cursors;
             self.palette.matches.clearRetainingCapacity();
+            self.palette.intent = .search_forward;
         }
-        self.palette.intent = .search;
     }
 
     fn requireFreshMatches(self: *Editor) void {
@@ -546,9 +600,12 @@ pub const Editor = struct {
 
         // "/" or "?" prompt.
         const prompt = switch (self.palette.intent) {
-            .search          => if (self.palette.direction == .forward) "/" else "?",
-            .split           => "s/",
+            .search_forward   => "/",
+            .search_backward  => "?",
+            .split            => "s/",
             .split_complement => "S/",
+            .filter_keep      => "v/",
+            .filter_drop      => "V/",
         };
         const prompt_w = platform.measureText(prompt, font_size);
         try dl.drawText(text_x, baseline, prompt, pal_dim, font_size);
@@ -1135,11 +1192,12 @@ pub const Editor = struct {
                         win.preferred_col = null;
                         win.mode = .insert;
                     },
-                    '/' => self.openPalette(.forward) catch {},
-                    '?' => self.openPalette(.backward) catch {},
-                    ':' => self.openPalette(.forward) catch {},
+                    '/' => self.openPalette(.search_forward) catch {},
+                    '?' => self.openPalette(.search_backward) catch {},
                     's' => self.openPaletteForSplit(false) catch {},
                     'S' => self.openPaletteForSplit(true) catch {},
+                    'v' => self.openPaletteForFilter(true) catch {},
+                    'V' => self.openPaletteForFilter(false) catch {},
                     'n' => {
                         self.requireFreshMatches();
                         if (self.palette.matches.items.len == 0 or cs.len == 0) return;
