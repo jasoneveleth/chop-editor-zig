@@ -722,6 +722,25 @@ pub const Editor = struct {
                                 },
                                 else => {},
                             },
+                            '"' => switch (@intFromEnum(key)) {
+                                'j' => {
+                                    const ls = grapheme.lineStart(content, cs.items[0].head);
+                                    const col_px = win.preferred_col orelse platform.measureText(content[ls..cs.items[0].head], win.font_size);
+                                    win.preferred_col = col_px;
+                                    for (cs.items[0..cs.len]) |*c| {
+                                        c.head = cursorDown(content, c.head, col_px, win.font_size);
+                                    }
+                                },
+                                'k' => {
+                                    const ls = grapheme.lineStart(content, cs.items[0].head);
+                                    const col_px = win.preferred_col orelse platform.measureText(content[ls..cs.items[0].head], win.font_size);
+                                    win.preferred_col = col_px;
+                                    for (cs.items[0..cs.len]) |*c| {
+                                        c.head = cursorUp(content, c.head, col_px, win.font_size);
+                                    }
+                                },
+                                else => {},
+                            },
                             else => {},
                         }
                     } else switch (@intFromEnum(key)) {
@@ -937,7 +956,7 @@ pub const Editor = struct {
                         }
                         win.preferred_col = null;
                     },
-                    'g', 'c', 'a', 'A' => { win.pending_key = @intCast(@intFromEnum(key)); },
+                    'g', 'c', 'a', 'A', '"' => { win.pending_key = @intCast(@intFromEnum(key)); },
                     else => {},
                     } // end single-key switch
                 }, // end pending_key else / isPrintable block
