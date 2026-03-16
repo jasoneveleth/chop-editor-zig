@@ -892,6 +892,40 @@ pub const Editor = struct {
                         win.preferred_col = null;
                     },
                     'd' => self.cut(win, cs),
+                    'D' => {
+                        if (cs.len == 0) return;
+                        const buf = self.getBuffer(win.buffer_id) orelse return;
+                        // Collect line ranges from current content, then merge overlapping.
+                        const content = buf.bytes();
+                        const Range = struct { start: usize, end: usize };
+                        var ranges: [512]Range = undefined;
+                        for (cs.items[0..cs.len], 0..) |c, i| {
+                            const ls = grapheme.lineStart(content, c.start());
+                            const le = grapheme.findChars(content, c.end(), "\n");
+                            ranges[i] = .{
+                                .start = ls,
+                                .end = if (le < content.len) le + 1 else content.len,
+                            };
+                        }
+                        // Merge (cursors are sorted so ranges are in order).
+                        var merged: [512]Range = undefined;
+                        var n: usize = 0;
+                        for (ranges[0..cs.len]) |r| {
+                            if (n > 0 and r.start <= merged[n - 1].end) {
+                                merged[n - 1].end = @max(merged[n - 1].end, r.end);
+                            } else {
+                                merged[n] = r;
+                                n += 1;
+                            }
+                        }
+                        // Delete in reverse order so positions stay valid.
+                        var i = n;
+                        while (i > 0) {
+                            i -= 1;
+                            self.bufferDelete(win.buffer_id, merged[i].start, merged[i].end - merged[i].start);
+                        }
+                        win.preferred_col = null;
+                    },
                     'y' => self.yank(win, cs),
                     'Y' => self.paste(win, cs),
                     '\'' => {
