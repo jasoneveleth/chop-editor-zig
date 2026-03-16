@@ -979,6 +979,7 @@ pub const Editor = struct {
                             c.anchor = c.head;
                         }
                         win.preferred_col = null;
+                        win.mode = .insert;
                     },
                     'g', 'c', 'a', 'A', '"' => { win.pending_key = @intCast(@intFromEnum(key)); },
                     else => {},
