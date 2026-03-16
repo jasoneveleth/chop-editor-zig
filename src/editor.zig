@@ -746,6 +746,30 @@ pub const Editor = struct {
                     } else switch (@intFromEnum(key)) {
                     'H' => self.extendSelection(win, cs, .left),
                     'L' => self.extendSelection(win, cs, .right),
+                    'x' => {
+                        const buf = self.getBuffer(win.buffer_id) orelse return;
+                        const content = buf.bytes();
+                        win.preferred_col = null;
+                        for (cs.items[0..cs.len]) |*c| {
+                            if (grapheme.lineStart(content, c.head) == grapheme.lineStart(content, c.anchor)) {
+                                c.anchor = grapheme.lineStart(content, c.head);
+                            }
+                            const le = grapheme.findChars(content, c.head, "\n");
+                            c.head = if (le < content.len) le + 1 else content.len;
+                        }
+                    },
+                    'X' => {
+                        const buf = self.getBuffer(win.buffer_id) orelse return;
+                        const content = buf.bytes();
+                        win.preferred_col = null;
+                        for (cs.items[0..cs.len]) |*c| {
+                            if (grapheme.lineStart(content, c.head) == grapheme.lineStart(content, c.anchor)) {
+                                c.anchor = grapheme.findChars(content, c.head, "\n");
+                            }
+                            const cur_ls = grapheme.lineStart(content, c.head);
+                            c.head = if (cur_ls > 0) cur_ls - 1 else 0;
+                        }
+                    },
                     'h' => {
                         if (cs.hasSelection()) {
                             cs.collapseToStart();
