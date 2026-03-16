@@ -383,8 +383,8 @@ pub const Editor = struct {
         const buf = self.getBuffer(win.buffer_id) orelse return;
         const content = buf.bytes();
         const pal_buf = self.getBuffer(self.palette.buffer_id) orelse return;
-        const pattern = pal_buf.bytes();
-        if (pattern.len == 0) return;
+        const typed = pal_buf.bytes();
+        const pattern: []const u8 = if (typed.len == 0) "\n" else typed;
 
         const saved = self.palette.saved_cursors;
         cs.clear();
@@ -413,8 +413,8 @@ pub const Editor = struct {
         const buf = self.getBuffer(win.buffer_id) orelse return;
         const content = buf.bytes();
         const pal_buf = self.getBuffer(self.palette.buffer_id) orelse return;
-        const pattern = pal_buf.bytes();
-        if (pattern.len == 0) return;
+        const typed = pal_buf.bytes();
+        const pattern: []const u8 = if (typed.len == 0) "\n" else typed;
 
         const saved = self.palette.saved_cursors;
         cs.clear();
