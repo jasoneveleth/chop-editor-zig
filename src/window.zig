@@ -26,6 +26,8 @@ pub const PendingState = union(enum) {
     md:     void, // 'm'+'d': waiting for delete-surround char
     mr1:    void, // 'm'+'r': waiting for char1 (old delimiter)
     mr2:    u8,   // 'm'+'r'+'c1': waiting for char2 (new delimiter), stores c1
+    rl:     void, // 'r': waiting for replacement char (replaces char to left)
+    rr:     void, // 'R': waiting for replacement char (replaces char to right)
 };
 
 pub const Window = struct {

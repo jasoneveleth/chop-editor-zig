@@ -655,6 +655,34 @@ pub const Editor = struct {
                                 }
                                 win.preferred_col = null;
                             },
+                            .rl => {
+                                const ch: u8 = @intCast(@intFromEnum(key));
+                                var idx = cs.len;
+                                while (idx > 0) {
+                                    idx -= 1;
+                                    const c = &cs.items[idx];
+                                    const prev = cursorLeft(content, c.head);
+                                    if (prev < c.head) {
+                                        self.bufferDelete(win.buffer_id, prev, c.head - prev);
+                                        self.bufferInsert(win.buffer_id, prev, &[_]u8{ch}) catch {};
+                                    }
+                                }
+                                win.preferred_col = null;
+                            },
+                            .rr => {
+                                const ch: u8 = @intCast(@intFromEnum(key));
+                                var idx = cs.len;
+                                while (idx > 0) {
+                                    idx -= 1;
+                                    const c = &cs.items[idx];
+                                    const next = cursorRight(content, c.head);
+                                    if (next > c.head) {
+                                        self.bufferInsert(win.buffer_id, next, &[_]u8{ch}) catch {};
+                                        self.bufferDelete(win.buffer_id, c.head, next - c.head);
+                                    }
+                                }
+                                win.preferred_col = null;
+                            },
                             .prefix => |pending| switch (pending) {
                             'g' => switch (@intFromEnum(key)) {
                                 'h' => {
@@ -1060,6 +1088,72 @@ pub const Editor = struct {
                         }
                         win.preferred_col = null;
                         win.mode = .insert;
+                    },
+                    'r' => { win.pending = .rl; },
+                    'R' => { win.pending = .rr; },
+                    't' => {
+                        const buf = self.getBuffer(win.buffer_id) orelse return;
+                        const content = buf.bytes();
+                        var idx = cs.len;
+                        while (idx > 0) {
+                            idx -= 1;
+                            const c = &cs.items[idx];
+                            const prev = cursorLeft(content, c.head);
+                            const next = cursorRight(content, c.head);
+                            if (prev < c.head and next > c.head) {
+                                const left_len = c.head - prev;
+                                const right_len = next - c.head;
+                                var left_copy: [32]u8 = undefined;
+                                var right_copy: [32]u8 = undefined;
+                                @memcpy(left_copy[0..left_len], content[prev..c.head]);
+                                @memcpy(right_copy[0..right_len], content[c.head..next]);
+                                self.bufferDelete(win.buffer_id, prev, left_len + right_len);
+                                self.bufferInsert(win.buffer_id, prev, right_copy[0..right_len]) catch {};
+                                self.bufferInsert(win.buffer_id, prev + right_len, left_copy[0..left_len]) catch {};
+                                c.head = cursorLeft(content, c.head);
+                                c.anchor = c.head;
+                            }
+                        }
+                        win.preferred_col = null;
+                    },
+                    'T' => {
+                        const buf = self.getBuffer(win.buffer_id) orelse return;
+                        const content = buf.bytes();
+                        var idx = cs.len;
+                        while (idx > 0) {
+                            idx -= 1;
+                            const c = &cs.items[idx];
+                            // Find left word end, then start
+                            if (c.head == 0 or (isWordChar(content[c.head]) and isWordChar(content[c.head-1]))) continue;
+                            var lend = c.head;
+                            while (lend > 0 and !isWordChar(content[lend - 1])) lend -= 1;
+                            if (lend == 0) continue;
+                            var lstart = lend;
+                            while (lstart > 0 and isWordChar(content[lstart - 1])) lstart -= 1;
+                            // Find right word start, then end
+                            var rstart = c.head;
+                            while (rstart < content.len and !isWordChar(content[rstart])) rstart += 1;
+                            if (rstart >= content.len) continue;
+                            var rend = rstart + 1;
+                            while (rend < content.len and isWordChar(content[rend])) rend += 1;
+                            // Words must not overlap
+                            if (lend > rstart) continue;
+                            const lword_len = lend - lstart;
+                            const rword_len = rend - rstart;
+                            const affected_len = rend - lstart;
+                            if (affected_len > 256) continue;
+                            var affected: [256]u8 = undefined;
+                            @memcpy(affected[0..affected_len], content[lstart..rend]);
+                            // Replace in reverse order to preserve offsets
+                            const prev_head = c.head;
+                            self.bufferDelete(win.buffer_id, lstart, affected_len);
+                            self.bufferInsert(win.buffer_id, lstart, affected[0..lword_len]) catch {};
+                            self.bufferInsert(win.buffer_id, lstart, affected[lend-lstart..rstart-lstart]) catch {};
+                            self.bufferInsert(win.buffer_id, lstart, affected[rstart-lstart..rend-lstart]) catch {};
+                            c.head = (prev_head + rword_len) - lword_len;
+                            c.anchor = c.head;
+                        }
+                        win.preferred_col = null;
                     },
                     'g', 'c', 'a', 'A', '"' => { win.pending = .{ .prefix = @intCast(@intFromEnum(key)) }; },
                     'm' => { win.pending = .{ .prefix = 'm' }; },
