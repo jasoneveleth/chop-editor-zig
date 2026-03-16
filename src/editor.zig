@@ -11,6 +11,7 @@ const Cursor = @import("cursor.zig").Cursor;
 const Key = @import("key.zig").Key;
 const MOD_CTRL = @import("key.zig").MOD_CTRL;
 const MOD_SHIFT = @import("key.zig").MOD_SHIFT;
+const MOD_ALT = @import("key.zig").MOD_ALT;
 const Palette = @import("palette.zig").Palette;
 const Match = @import("palette.zig").Match;
 const Direction = @import("palette.zig").Direction;
@@ -821,6 +822,28 @@ pub const Editor = struct {
                                         }
                                     }
                                 },
+                                'j' => {
+                                    if (cs.len == 0) return;
+                                    const last = cs.items[cs.len - 1];
+                                    const ls = grapheme.lineStart(content, last.head);
+                                    const col_px = win.preferred_col orelse platform.measureText(content[ls..last.head], win.font_size);
+                                    win.preferred_col = col_px;
+                                    const new_head = cursorDown(content, last.head, col_px, win.font_size);
+                                    if (new_head != last.head) {
+                                        cs.insert(.{ .head = new_head, .anchor = new_head }) catch {};
+                                    }
+                                },
+                                'k' => {
+                                    if (cs.len == 0) return;
+                                    const first = cs.items[0];
+                                    const ls = grapheme.lineStart(content, first.head);
+                                    const col_px = win.preferred_col orelse platform.measureText(content[ls..first.head], win.font_size);
+                                    win.preferred_col = col_px;
+                                    const new_head = cursorUp(content, first.head, col_px, win.font_size);
+                                    if (new_head != first.head) {
+                                        cs.insert(.{ .head = new_head, .anchor = new_head }) catch {};
+                                    }
+                                },
                                 else => {},
                             },
                             '"' => switch (@intFromEnum(key)) {
@@ -891,12 +914,71 @@ pub const Editor = struct {
                         } else self.move(win, cs, .right);
                     },
                     'k' => {
-                        cs.clearSelections();
-                        self.move(win, cs, .up);
+                        if (mods & MOD_ALT != 0) {
+                            // Move line up
+                            const buf = self.getBuffer(win.buffer_id) orelse return;
+                            for (cs.items[0..cs.len]) |*c| {
+                                const content = buf.bytes();
+                                const ls = grapheme.lineStart(content, c.head);
+                                if (ls == 0) continue;
+                                const prev_le = ls - 1;
+                                const prev_ls = grapheme.lineStart(content, prev_le);
+                                const le = grapheme.findChars(content, c.head, "\n");
+                                const col_offset = c.head - ls;
+                                const la_len = le - ls;
+                                const lb_len = prev_le - prev_ls;
+                                if (la_len > 4096 or lb_len > 4096) continue;
+                                var line_a: [4096]u8 = undefined;
+                                var line_b: [4096]u8 = undefined;
+                                @memcpy(line_a[0..la_len], content[ls..le]);
+                                @memcpy(line_b[0..lb_len], content[prev_ls..prev_le]);
+                                self.bufferDelete(win.buffer_id, prev_ls, le - prev_ls);
+                                self.bufferInsert(win.buffer_id, prev_ls, line_a[0..la_len]) catch {};
+                                self.bufferInsert(win.buffer_id, prev_ls + la_len, "\n") catch {};
+                                self.bufferInsert(win.buffer_id, prev_ls + la_len + 1, line_b[0..lb_len]) catch {};
+                                c.head = prev_ls + @min(col_offset, la_len);
+                                c.anchor = c.head;
+                            }
+                            win.preferred_col = null;
+                        } else {
+                            cs.clearSelections();
+                            self.move(win, cs, .up);
+                        }
                     },
                     'j' => {
-                        cs.clearSelections();
-                        self.move(win, cs, .down);
+                        if (mods & MOD_ALT != 0) {
+                            // Move line down
+                            const buf = self.getBuffer(win.buffer_id) orelse return;
+                            var idx = cs.len;
+                            while (idx > 0) {
+                                idx -= 1;
+                                const c = &cs.items[idx];
+                                const content = buf.bytes();
+                                const ls = grapheme.lineStart(content, c.head);
+                                const le = grapheme.findChars(content, c.head, "\n");
+                                if (le >= content.len) continue;
+                                const next_ls = le + 1;
+                                const next_le = grapheme.findChars(content, next_ls, "\n");
+                                const col_offset = c.head - ls;
+                                const la_len = le - ls;
+                                const lb_len = next_le - next_ls;
+                                if (la_len > 4096 or lb_len > 4096) continue;
+                                var line_a: [4096]u8 = undefined;
+                                var line_b: [4096]u8 = undefined;
+                                @memcpy(line_a[0..la_len], content[ls..le]);
+                                @memcpy(line_b[0..lb_len], content[next_ls..next_le]);
+                                self.bufferDelete(win.buffer_id, ls, next_le - ls);
+                                self.bufferInsert(win.buffer_id, ls, line_b[0..lb_len]) catch {};
+                                self.bufferInsert(win.buffer_id, ls + lb_len, "\n") catch {};
+                                self.bufferInsert(win.buffer_id, ls + lb_len + 1, line_a[0..la_len]) catch {};
+                                c.head = ls + lb_len + 1 + @min(col_offset, la_len);
+                                c.anchor = c.head;
+                            }
+                            win.preferred_col = null;
+                        } else {
+                            cs.clearSelections();
+                            self.move(win, cs, .down);
+                        }
                     },
                     'w' => {
                         const buf = self.getBuffer(win.buffer_id) orelse return;

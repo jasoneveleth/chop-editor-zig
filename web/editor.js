@@ -119,6 +119,12 @@ const SPECIAL_KEYS = {
 };
 
 function encodeKey(e) {
+  // On macOS, Alt+letter reports the alt-modified character in e.key (e.g. Alt+k → "˚").
+  // Recover the base letter from e.code ("KeyK" → "k") so the Zig side sees the
+  // plain codepoint with MOD_ALT set in mods.
+  if (e.altKey && e.code.startsWith("Key")) {
+    return e.code.slice(3).toLowerCase().codePointAt(0);
+  }
   if (e.key.length === 1) return e.key.codePointAt(0);
   return SPECIAL_KEYS[e.key] ?? 0xFFFFFFFF;
 }
