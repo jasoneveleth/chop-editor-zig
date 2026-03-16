@@ -15,6 +15,7 @@ const MOD_ALT = @import("key.zig").MOD_ALT;
 const Palette = @import("palette.zig").Palette;
 const Match = @import("palette.zig").Match;
 const Direction = @import("palette.zig").Direction;
+const PaletteIntent = @import("palette.zig").PaletteIntent;
 const platform = @import("platform/web.zig");
 const grapheme = @import("grapheme.zig");
 
@@ -357,24 +358,126 @@ pub const Editor = struct {
         }
     }
 
+    fn openPaletteForSplit(self: *Editor, complement: bool) !void {
+        const win = self.getWindow(self.focused_window) orelse return;
+        const cs = self.getCursorSet(win.cursor_set_id) orelse return;
+        if (!cs.hasSelection()) return;
+
+        self.palette.intent = if (complement) .split_complement else .split;
+        self.palette.saved_cursors = cs.*;
+
+        const pal_buf = self.getBuffer(self.palette.buffer_id) orelse return;
+        if (pal_buf.len() > 0) self.bufferDelete(self.palette.buffer_id, 0, pal_buf.len());
+
+        const pal_cs = self.getCursorSet(self.palette.cursor_set_id) orelse return;
+        pal_cs.clear();
+        try pal_cs.insert(Cursor.init(0));
+
+        self.palette.matches.clearRetainingCapacity();
+        win.mode = .command;
+    }
+
+    fn applySplit(self: *Editor) void {
+        const win = self.getWindow(self.focused_window) orelse return;
+        const cs = self.getCursorSet(win.cursor_set_id) orelse return;
+        const buf = self.getBuffer(win.buffer_id) orelse return;
+        const content = buf.bytes();
+        const pal_buf = self.getBuffer(self.palette.buffer_id) orelse return;
+        const pattern = pal_buf.bytes();
+        if (pattern.len == 0) return;
+
+        const saved = self.palette.saved_cursors;
+        cs.clear();
+
+        for (saved.items[0..saved.len]) |cursor| {
+            if (!cursor.isSelection()) continue;
+            const sel_start = cursor.start();
+            const sel_end   = cursor.end();
+            var i: usize = sel_start;
+            while (i + pattern.len <= sel_end) {
+                if (std.mem.eql(u8, content[i .. i + pattern.len], pattern)) {
+                    cs.insert(.{ .anchor = i, .head = i + pattern.len }) catch break;
+                    i += pattern.len;
+                } else {
+                    i += 1;
+                }
+            }
+        }
+
+        if (cs.len == 0) cs.* = saved;
+    }
+
+    fn applySplitComplement(self: *Editor) void {
+        const win = self.getWindow(self.focused_window) orelse return;
+        const cs = self.getCursorSet(win.cursor_set_id) orelse return;
+        const buf = self.getBuffer(win.buffer_id) orelse return;
+        const content = buf.bytes();
+        const pal_buf = self.getBuffer(self.palette.buffer_id) orelse return;
+        const pattern = pal_buf.bytes();
+        if (pattern.len == 0) return;
+
+        const saved = self.palette.saved_cursors;
+        cs.clear();
+
+        for (saved.items[0..saved.len]) |cursor| {
+            if (!cursor.isSelection()) continue;
+            const sel_start = cursor.start();
+            const sel_end   = cursor.end();
+            var gap_start: usize = sel_start;
+            var i: usize = sel_start;
+            while (i + pattern.len <= sel_end) {
+                if (std.mem.eql(u8, content[i .. i + pattern.len], pattern)) {
+                    if (gap_start < i)
+                        cs.insert(.{ .anchor = gap_start, .head = i }) catch break;
+                    i += pattern.len;
+                    gap_start = i;
+                } else {
+                    i += 1;
+                }
+            }
+            if (gap_start < sel_end)
+                cs.insert(.{ .anchor = gap_start, .head = sel_end }) catch {};
+        }
+
+        if (cs.len == 0) cs.* = saved;
+    }
+
     fn closePalette(self: *Editor, confirm: bool) void {
         const win = self.getWindow(self.focused_window) orelse return;
         win.mode = .normal;
         const cs = self.getCursorSet(win.cursor_set_id) orelse return;
 
-        if (confirm and self.palette.matches.items.len > 0) {
-            const saved_head = if (self.palette.saved_cursors.len > 0) self.palette.saved_cursors.items[0].head else 0;
-            const m = if (self.palette.direction == .forward)
-                findNextMatchFrom(self.palette.matches.items, saved_head) orelse self.palette.matches.items[0]
-            else
-                findPrevMatchFrom(self.palette.matches.items, saved_head) orelse self.palette.matches.items[self.palette.matches.items.len - 1];
-            cs.clear();
-            cs.insert(.{ .head = m.end, .anchor = m.start }) catch {};
-            // Keep matches alive for n/p/N/P navigation.
+        if (confirm) {
+            switch (self.palette.intent) {
+                .search => {
+                    if (self.palette.matches.items.len > 0) {
+                        const saved_head = if (self.palette.saved_cursors.len > 0) self.palette.saved_cursors.items[0].head else 0;
+                        const m = if (self.palette.direction == .forward)
+                            findNextMatchFrom(self.palette.matches.items, saved_head) orelse self.palette.matches.items[0]
+                        else
+                            findPrevMatchFrom(self.palette.matches.items, saved_head) orelse self.palette.matches.items[self.palette.matches.items.len - 1];
+                        cs.clear();
+                        cs.insert(.{ .head = m.end, .anchor = m.start }) catch {};
+                        // Keep matches alive for n/p/N/P navigation.
+                    } else {
+                        cs.* = self.palette.saved_cursors;
+                        self.palette.matches.clearRetainingCapacity();
+                    }
+                },
+                .split => {
+                    self.applySplit();
+                    self.palette.matches.clearRetainingCapacity();
+                },
+                .split_complement => {
+                    self.applySplitComplement();
+                    self.palette.matches.clearRetainingCapacity();
+                },
+            }
         } else {
             cs.* = self.palette.saved_cursors;
             self.palette.matches.clearRetainingCapacity();
         }
+        self.palette.intent = .search;
     }
 
     fn requireFreshMatches(self: *Editor) void {
@@ -442,7 +545,11 @@ pub const Editor = struct {
         );
 
         // "/" or "?" prompt.
-        const prompt = if (self.palette.direction == .forward) "/" else "?";
+        const prompt = switch (self.palette.intent) {
+            .search          => if (self.palette.direction == .forward) "/" else "?",
+            .split           => "s/",
+            .split_complement => "S/",
+        };
         const prompt_w = platform.measureText(prompt, font_size);
         try dl.drawText(text_x, baseline, prompt, pal_dim, font_size);
 
@@ -1031,6 +1138,8 @@ pub const Editor = struct {
                     '/' => self.openPalette(.forward) catch {},
                     '?' => self.openPalette(.backward) catch {},
                     ':' => self.openPalette(.forward) catch {},
+                    's' => self.openPaletteForSplit(false) catch {},
+                    'S' => self.openPaletteForSplit(true) catch {},
                     'n' => {
                         self.requireFreshMatches();
                         if (self.palette.matches.items.len == 0 or cs.len == 0) return;

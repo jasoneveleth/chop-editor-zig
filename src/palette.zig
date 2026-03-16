@@ -10,6 +10,8 @@ pub const Match = struct {
 
 pub const Direction = enum { forward, backward };
 
+pub const PaletteIntent = enum { search, split, split_complement };
+
 pub const Palette = struct {
     buffer_id: BufferId,
     cursor_set_id: CursorSetId,
@@ -19,6 +21,7 @@ pub const Palette = struct {
     matches: std.ArrayList(Match),
     matches_stale: bool = false,
     direction: Direction = .forward,
+    intent: PaletteIntent = .search,
 
     pub fn init(buffer_id: BufferId, cursor_set_id: CursorSetId) Palette {
         return .{
