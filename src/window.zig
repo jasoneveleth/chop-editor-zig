@@ -19,6 +19,15 @@ pub const Mode = enum {
     command,
 };
 
+pub const PendingState = union(enum) {
+    none:   void,
+    prefix: u8,   // first key of a 2-key cmd (g/a/A/c/"), waiting for 2nd
+    ms:     void, // 'm'+'s': waiting for surround char
+    md:     void, // 'm'+'d': waiting for delete-surround char
+    mr1:    void, // 'm'+'r': waiting for char1 (old delimiter)
+    mr2:    u8,   // 'm'+'r'+'c1': waiting for char2 (new delimiter), stores c1
+};
+
 pub const Window = struct {
     mode: Mode,
     buffer_id: BufferId,
@@ -29,7 +38,7 @@ pub const Window = struct {
     height: f32,
     font_size: f32,
     preferred_col: ?f32 = null,
-    pending_key: ?u8 = null,
+    pending: PendingState = .none,
 
     pub fn init(buffer_id: BufferId, cursor_set_id: CursorSetId, width: u32, height: u32) Window {
         return .{

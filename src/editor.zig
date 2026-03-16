@@ -4,6 +4,7 @@ const Buffer = @import("buffer.zig").Buffer;
 const BufferId = @import("buffer.zig").BufferId;
 const Window = @import("window.zig").Window;
 const WindowId = @import("window.zig").WindowId;
+const PendingState = @import("window.zig").PendingState;
 const CursorSet = @import("cursor_set.zig").CursorSet;
 const CursorSetId = @import("cursor_set.zig").CursorSetId;
 const Cursor = @import("cursor.zig").Cursor;
@@ -133,7 +134,7 @@ fn findPrevMatchFrom(matches: []const Match, from: usize) ?Match {
     return null;
 }
 
-fn quoteBounds(content: []const u8, pos: usize, quote: u8) ?struct { start: usize, end: usize } {
+fn quoteBounds(content: []const u8, pos: usize, quote: u8) ?Bounds {
     // search backward for opening quote
     var s = pos;
     while (true) {
@@ -148,7 +149,7 @@ fn quoteBounds(content: []const u8, pos: usize, quote: u8) ?struct { start: usiz
     return .{ .start = s, .end = e };
 }
 
-fn parenBounds(content: []const u8, pos: usize, open: u8, close: u8) ?struct { start: usize, end: usize } {
+fn parenBounds(content: []const u8, pos: usize, open: u8, close: u8) ?Bounds {
     // search backward for opening paren (tracking nesting)
     var depth: usize = 0;
     var s = pos;
@@ -175,13 +176,35 @@ fn parenBounds(content: []const u8, pos: usize, open: u8, close: u8) ?struct { s
     return .{ .start = s, .end = e };
 }
 
-fn wordBoundsAt(content: []const u8, pos: usize) ?struct { start: usize, end: usize } {
+fn wordBoundsAt(content: []const u8, pos: usize) ?Bounds {
     if (pos >= content.len or !isWordChar(content[pos])) return null;
     var s = pos;
     while (s > 0 and isWordChar(content[s - 1])) s -= 1;
     var e = pos + 1;
     while (e < content.len and isWordChar(content[e])) e += 1;
     return .{ .start = s, .end = e };
+}
+
+const Bounds = struct { start: usize, end: usize };
+
+fn surroundPair(ch: u8) struct { open: u8, close: u8 } {
+    return switch (ch) {
+        '(', ')' => .{ .open = '(', .close = ')' },
+        '[', ']' => .{ .open = '[', .close = ']' },
+        '{', '}' => .{ .open = '{', .close = '}' },
+        '<', '>' => .{ .open = '<', .close = '>' },
+        else     => .{ .open = ch,  .close = ch  },
+    };
+}
+
+fn surroundBounds(content: []const u8, pos: usize, ch: u8) ?Bounds {
+    return switch (ch) {
+        '(', ')' => parenBounds(content, pos, '(', ')'),
+        '[', ']' => parenBounds(content, pos, '[', ']'),
+        '{', '}' => parenBounds(content, pos, '{', '}'),
+        '<', '>' => parenBounds(content, pos, '<', '>'),
+        else     => quoteBounds(content, pos, ch),
+    };
 }
 
 pub const Editor = struct {
@@ -550,7 +573,7 @@ pub const Editor = struct {
         const cs = self.getCursorSet(win.cursor_set_id) orelse return;
         switch (win.mode) {
             .normal => switch (key) {
-                .escape => { win.pending_key = null; },
+                .escape => { win.pending = .none; },
                 .arrow_left => self.move(win, cs, .left),
                 .arrow_right => self.move(win, cs, .right),
                 .arrow_up => self.move(win, cs, .up),
@@ -578,11 +601,61 @@ pub const Editor = struct {
                     }
                 },
                 else => if (key.isPrintable()) {
-                    if (win.pending_key) |pending| {
-                        win.pending_key = null;
+                    if (win.pending != .none) {
+                        const prev_pending = win.pending;
+                        win.pending = .none;
                         const buf = self.getBuffer(win.buffer_id) orelse return;
                         const content = buf.bytes();
-                        switch (pending) {
+                        switch (prev_pending) {
+                            .none => unreachable,
+                            .ms => {
+                                const pair = surroundPair(@intCast(@intFromEnum(key)));
+                                var idx = cs.len;
+                                while (idx > 0) {
+                                    idx -= 1;
+                                    const c = &cs.items[idx];
+                                    const s = c.start();
+                                    const e = c.end();
+                                    self.bufferInsert(win.buffer_id, e, &[_]u8{pair.close}) catch continue;
+                                    self.bufferInsert(win.buffer_id, s, &[_]u8{pair.open}) catch continue;
+                                }
+                                win.preferred_col = null;
+                            },
+                            .md => {
+                                const ch: u8 = @intCast(@intFromEnum(key));
+                                var idx = cs.len;
+                                while (idx > 0) {
+                                    idx -= 1;
+                                    const c = &cs.items[idx];
+                                    if (surroundBounds(content, c.head, ch)) |b| {
+                                        self.bufferDelete(win.buffer_id, b.end, 1);
+                                        self.bufferDelete(win.buffer_id, b.start, 1);
+                                        c.head = b.start;
+                                        c.anchor = b.start;
+                                    }
+                                }
+                                win.preferred_col = null;
+                            },
+                            .mr1 => {
+                                win.pending = .{ .mr2 = @intCast(@intFromEnum(key)) };
+                            },
+                            .mr2 => |char1| {
+                                const char2: u8 = @intCast(@intFromEnum(key));
+                                const pair2 = surroundPair(char2);
+                                var idx = cs.len;
+                                while (idx > 0) {
+                                    idx -= 1;
+                                    const c = &cs.items[idx];
+                                    if (surroundBounds(content, c.head, char1)) |b| {
+                                        self.bufferDelete(win.buffer_id, b.end, 1);
+                                        self.bufferInsert(win.buffer_id, b.end, &[_]u8{pair2.close}) catch {};
+                                        self.bufferDelete(win.buffer_id, b.start, 1);
+                                        self.bufferInsert(win.buffer_id, b.start, &[_]u8{pair2.open}) catch {};
+                                    }
+                                }
+                                win.preferred_col = null;
+                            },
+                            .prefix => |pending| switch (pending) {
                             'g' => switch (@intFromEnum(key)) {
                                 'h' => {
                                     for (cs.items[0..cs.len]) |*c| {
@@ -742,7 +815,14 @@ pub const Editor = struct {
                                 else => {},
                             },
                             else => {},
-                        }
+                            'm' => switch (@intFromEnum(key)) {
+                                's' => { win.pending = .ms; },
+                                'd' => { win.pending = .md; },
+                                'r' => { win.pending = .mr1; },
+                                else => {},
+                            },
+                        },
+                    }
                     } else switch (@intFromEnum(key)) {
                     'H' => self.extendSelection(win, cs, .left),
                     'L' => self.extendSelection(win, cs, .right),
@@ -981,7 +1061,8 @@ pub const Editor = struct {
                         win.preferred_col = null;
                         win.mode = .insert;
                     },
-                    'g', 'c', 'a', 'A', '"' => { win.pending_key = @intCast(@intFromEnum(key)); },
+                    'g', 'c', 'a', 'A', '"' => { win.pending = .{ .prefix = @intCast(@intFromEnum(key)) }; },
+                    'm' => { win.pending = .{ .prefix = 'm' }; },
                     else => {},
                     } // end single-key switch
                 }, // end pending_key else / isPrintable block
