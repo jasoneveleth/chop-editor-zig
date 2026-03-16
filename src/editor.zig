@@ -135,6 +135,23 @@ fn findPrevMatchFrom(matches: []const Match, from: usize) ?Match {
     return null;
 }
 
+fn sneakForward(content: []const u8, from: usize, c1: u8, c2: u8) ?usize {
+    var i = from + 1;
+    while (i + 1 < content.len) : (i += 1) {
+        if (content[i] == c1 and content[i + 1] == c2) return i;
+    }
+    return null;
+}
+
+fn sneakBackward(content: []const u8, from: usize, c1: u8, c2: u8) ?usize {
+    var i = from;
+    while (i > 0) {
+        i -= 1;
+        if (i + 1 < content.len and content[i] == c1 and content[i + 1] == c2) return i;
+    }
+    return null;
+}
+
 fn quoteBounds(content: []const u8, pos: usize, quote: u8) ?Bounds {
     // search backward for opening quote
     var s = pos;
@@ -732,6 +749,23 @@ pub const Editor = struct {
         }
     }
 
+    fn execSneak(self: *Editor, win: *Window, cs: *CursorSet, c1: u8, c2: u8, forward: bool) void {
+        if (c1 == 0) return;
+        const buf = self.getBuffer(win.buffer_id) orelse return;
+        const content = buf.bytes();
+        for (cs.items[0..cs.len]) |*c| {
+            const result = if (forward)
+                sneakForward(content, c.head, c1, c2)
+            else
+                sneakBackward(content, c.head, c1, c2);
+            if (result) |pos| {
+                c.head = pos;
+                c.anchor = pos;
+            }
+        }
+        win.preferred_col = null;
+    }
+
     pub fn onKeyDown(self: *Editor, time_ms: f64, key: Key, mods: u32) void {
         self.last_input_ms = time_ms;
         const win = self.getWindow(self.focused_window) orelse return;
@@ -847,6 +881,16 @@ pub const Editor = struct {
                                     }
                                 }
                                 win.preferred_col = null;
+                            },
+                            .sf1 => |forward| {
+                                win.pending = .{ .sf2 = .{ .forward = forward, .c1 = @intCast(@intFromEnum(key)) } };
+                            },
+                            .sf2 => |state| {
+                                const c2: u8 = @intCast(@intFromEnum(key));
+                                win.sneak_c1 = state.c1;
+                                win.sneak_c2 = c2;
+                                win.sneak_forward = state.forward;
+                                self.execSneak(win, cs, state.c1, c2, state.forward);
                             },
                             .prefix => |pending| switch (pending) {
                             'g' => switch (@intFromEnum(key)) {
@@ -1340,6 +1384,10 @@ pub const Editor = struct {
                     },
                     'r' => { win.pending = .rl; },
                     'R' => { win.pending = .rr; },
+                    'f' => { win.pending = .{ .sf1 = true }; },
+                    'F' => { win.pending = .{ .sf1 = false }; },
+                    ';' => self.execSneak(win, cs, win.sneak_c1, win.sneak_c2, win.sneak_forward),
+                    ':' => self.execSneak(win, cs, win.sneak_c1, win.sneak_c2, !win.sneak_forward),
                     't' => {
                         const buf = self.getBuffer(win.buffer_id) orelse return;
                         const content = buf.bytes();

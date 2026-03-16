@@ -28,6 +28,8 @@ pub const PendingState = union(enum) {
     mr2:    u8,   // 'm'+'r'+'c1': waiting for char2 (new delimiter), stores c1
     rl:     void, // 'r': waiting for replacement char (replaces char to left)
     rr:     void, // 'R': waiting for replacement char (replaces char to right)
+    sf1:    bool, // 'f'/'F': waiting for first sneak char; true=forward
+    sf2:    struct { forward: bool, c1: u8 }, // 'f'/'F'+c1: waiting for second sneak char
 };
 
 pub const Window = struct {
@@ -41,6 +43,9 @@ pub const Window = struct {
     font_size: f32,
     preferred_col: ?f32 = null,
     pending: PendingState = .none,
+    sneak_c1: u8 = 0,
+    sneak_c2: u8 = 0,
+    sneak_forward: bool = true,
 
     pub fn init(buffer_id: BufferId, cursor_set_id: CursorSetId, width: u32, height: u32) Window {
         return .{
@@ -121,7 +126,7 @@ pub const Window = struct {
 
         // Draw each cursor at its accurate screen position.
         const normal_color = draw.Color.rgb(0, 196, 255); // #00C4FF
-        const insert_color = draw.Color.rgb(223, 41, 53);  // #df2935
+        const insert_color = draw.Color.rgb(255, 116, 108); // #FFA66C
         const cursor_color = if (self.mode == .insert) insert_color else normal_color;
 
         for (cs.iter()) |cursor| {
