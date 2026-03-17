@@ -319,6 +319,11 @@ pub const Editor = struct {
         return &self.cursor_sets.items[id.index];
     }
 
+    /// Infallible buffer accessor — valid whenever the window/buffer_id was created by this editor.
+    fn bufOf(self: *Editor, id: BufferId) *Buffer {
+        return &self.buffers.items[id.index];
+    }
+
     /// Insert text into a buffer and fan out cursor adjustments to all watching cursor sets.
     pub fn bufferInsert(self: *Editor, buffer_id: BufferId, pos: usize, text: []const u8) !void {
         const buf = self.getBuffer(buffer_id) orelse return;
@@ -670,7 +675,7 @@ pub const Editor = struct {
     /// Uses strict `> pos` adjustment so overlapping cursors separate rather than
     /// all being bumped to the same post-insertion position.
     fn insertAtCursors(self: *Editor, win: *Window, cs: *CursorSet, text: []const u8) void {
-        const buf_obj = self.getBuffer(win.buffer_id) orelse return;
+        const buf_obj = self.bufOf(win.buffer_id);
         var idx = cs.len;
         while (idx > 0) {
             idx -= 1;
@@ -693,7 +698,7 @@ pub const Editor = struct {
     }
 
     fn extendSelection(self: *Editor, win: *Window, cs: *CursorSet, dir: Dir) void {
-        const buf = self.getBuffer(win.buffer_id) orelse return;
+        const buf = self.bufOf(win.buffer_id);
         const content = buf.bytes();
         win.preferred_col = null;
         for (cs.items[0..cs.len]) |*c| {
@@ -703,7 +708,7 @@ pub const Editor = struct {
 
     fn yank(self: *Editor, win: *Window, cs: *CursorSet) void {
         if (cs.len == 0) return;
-        const buf = self.getBuffer(win.buffer_id) orelse return;
+        const buf = self.bufOf(win.buffer_id);
         const content = buf.bytes();
         const c = cs.items[0];
         if (c.isSelection()) {
@@ -718,7 +723,7 @@ pub const Editor = struct {
 
     fn cut(self: *Editor, win: *Window, cs: *CursorSet) void {
         if (cs.len == 0) return;
-        const buf = self.getBuffer(win.buffer_id) orelse return;
+        const buf = self.bufOf(win.buffer_id);
         const content = buf.bytes();
         const c = cs.items[0];
         if (c.isSelection()) {
@@ -741,7 +746,7 @@ pub const Editor = struct {
     }
 
     fn move(self: *Editor, win: *Window, cs: *CursorSet, dir: Dir) void {
-        const buf = self.getBuffer(win.buffer_id) orelse return;
+        const buf = self.bufOf(win.buffer_id);
         const content = buf.bytes();
         for (cs.items[0..cs.len]) |*c| {
             switch (dir) {
@@ -762,7 +767,7 @@ pub const Editor = struct {
 
     fn execSneak(self: *Editor, win: *Window, cs: *CursorSet, c1: u8, c2: u8, forward: bool) void {
         if (c1 == 0) return;
-        const buf = self.getBuffer(win.buffer_id) orelse return;
+        const buf = self.bufOf(win.buffer_id);
         const content = buf.bytes();
         for (cs.items[0..cs.len]) |*c| {
             const result = if (forward)
@@ -778,7 +783,7 @@ pub const Editor = struct {
     }
 
     fn applyUndo(self: *Editor, win: *Window, cs: *CursorSet) void {
-        const buf = self.getBuffer(win.buffer_id) orelse return;
+        const buf = self.bufOf(win.buffer_id);
         self.undo_stack.undo(buf, cs);
         win.preferred_col = null;
         self.palette.matches_stale = true;
@@ -792,15 +797,16 @@ pub const Editor = struct {
             .normal => {
                 self.undo_stack.begin(cs);
                 defer if (win.mode != .insert) self.undo_stack.commit(self.allocator);
+                var keep_preferred_col = false;
+                defer if (!keep_preferred_col) { win.preferred_col = null; };
                 switch (key) {
                 .escape => { win.pending = .none; },
                 .arrow_left => self.move(win, cs, .left),
                 .arrow_right => self.move(win, cs, .right),
-                .arrow_up => self.move(win, cs, .up),
-                .arrow_down => self.move(win, cs, .down),
+                .arrow_up => { self.move(win, cs, .up); keep_preferred_col = true; },
+                .arrow_down => { self.move(win, cs, .down); keep_preferred_col = true; },
                 .backspace => {
-                    win.preferred_col = null;
-                    const buf = self.getBuffer(win.buffer_id) orelse return;
+                    const buf = self.bufOf(win.buffer_id);
                     const content = buf.bytes();
                     if (mods & MOD_SHIFT != 0) {
                         // delete char after cursor
@@ -824,7 +830,7 @@ pub const Editor = struct {
                     if (win.pending != .none) {
                         const prev_pending = win.pending;
                         win.pending = .none;
-                        const buf = self.getBuffer(win.buffer_id) orelse return;
+                        const buf = self.bufOf(win.buffer_id);
                         const content = buf.bytes();
                         switch (prev_pending) {
                             .none => unreachable,
@@ -839,7 +845,6 @@ pub const Editor = struct {
                                     self.bufferInsert(win.buffer_id, e, &[_]u8{pair.close}) catch continue;
                                     self.bufferInsert(win.buffer_id, s, &[_]u8{pair.open}) catch continue;
                                 }
-                                win.preferred_col = null;
                             },
                             .md => {
                                 const ch: u8 = @intCast(@intFromEnum(key));
@@ -854,7 +859,6 @@ pub const Editor = struct {
                                         c.anchor = b.start;
                                     }
                                 }
-                                win.preferred_col = null;
                             },
                             .mr1 => {
                                 win.pending = .{ .mr2 = @intCast(@intFromEnum(key)) };
@@ -873,7 +877,6 @@ pub const Editor = struct {
                                         self.bufferInsert(win.buffer_id, b.start, &[_]u8{pair2.open}) catch {};
                                     }
                                 }
-                                win.preferred_col = null;
                             },
                             .rl => {
                                 const ch: u8 = @intCast(@intFromEnum(key));
@@ -887,7 +890,6 @@ pub const Editor = struct {
                                         self.bufferInsert(win.buffer_id, prev, &[_]u8{ch}) catch {};
                                     }
                                 }
-                                win.preferred_col = null;
                             },
                             .rr => {
                                 const ch: u8 = @intCast(@intFromEnum(key));
@@ -901,7 +903,6 @@ pub const Editor = struct {
                                         self.bufferDelete(win.buffer_id, c.head, next - c.head);
                                     }
                                 }
-                                win.preferred_col = null;
                             },
                             .sf1 => |forward| {
                                 win.pending = .{ .sf2 = .{ .forward = forward, .c1 = @intCast(@intFromEnum(key)) } };
@@ -920,14 +921,12 @@ pub const Editor = struct {
                                         c.head = grapheme.lineStart(content, c.head);
                                         c.anchor = c.head;
                                     }
-                                    win.preferred_col = null;
                                 },
                                 'l' => {
                                     for (cs.items[0..cs.len]) |*c| {
                                         c.head = grapheme.findChars(content, c.head, "\n");
                                         c.anchor = c.head;
                                     }
-                                    win.preferred_col = null;
                                 },
                                 'k' => {
                                     const first_line_end = grapheme.findChars(content, 0, "\n");
@@ -938,6 +937,7 @@ pub const Editor = struct {
                                         c.head = closestPosToX(content, 0, first_line_end, col_px, win.font_size);
                                         c.anchor = c.head;
                                     }
+                                    keep_preferred_col = true;
                                 },
                                 'j' => {
                                     var last_ls: usize = 0;
@@ -951,6 +951,7 @@ pub const Editor = struct {
                                         c.head = closestPosToX(content, last_ls, content.len, col_px, win.font_size);
                                         c.anchor = c.head;
                                     }
+                                    keep_preferred_col = true;
                                 },
                                 else => {},
                             },
@@ -962,7 +963,6 @@ pub const Editor = struct {
                                             c.head = wb.end;
                                         }
                                     }
-                                    win.preferred_col = null;
                                 },
                                 '\'' => {
                                     for (cs.items[0..cs.len]) |*c| {
@@ -971,7 +971,6 @@ pub const Editor = struct {
                                             c.head = qb.end;
                                         }
                                     }
-                                    win.preferred_col = null;
                                 },
                                 '(', ')' => {
                                     for (cs.items[0..cs.len]) |*c| {
@@ -980,7 +979,6 @@ pub const Editor = struct {
                                             c.head = pb.end;
                                         }
                                     }
-                                    win.preferred_col = null;
                                 },
                                 'p' => {
                                     for (cs.items[0..cs.len]) |*c| {
@@ -1002,7 +1000,6 @@ pub const Editor = struct {
                                         c.anchor = s;
                                         c.head = e;
                                     }
-                                    win.preferred_col = null;
                                 },
                                 'e' => {
                                     if (cs.len > 0) {
@@ -1010,7 +1007,6 @@ pub const Editor = struct {
                                         cs.items[0].head = content.len;
                                         cs.len = 1;
                                     }
-                                    win.preferred_col = null;
                                 },
                                 else => {},
                             },
@@ -1022,7 +1018,6 @@ pub const Editor = struct {
                                             c.head = qb.end + 1;
                                         }
                                     }
-                                    win.preferred_col = null;
                                 },
                                 else => {},
                             },
@@ -1061,6 +1056,7 @@ pub const Editor = struct {
                                     if (new_head != last.head) {
                                         cs.insert(.{ .head = new_head, .anchor = new_head }) catch {};
                                     }
+                                    keep_preferred_col = true;
                                 },
                                 'k' => {
                                     if (cs.len == 0) return;
@@ -1072,6 +1068,7 @@ pub const Editor = struct {
                                     if (new_head != first.head) {
                                         cs.insert(.{ .head = new_head, .anchor = new_head }) catch {};
                                     }
+                                    keep_preferred_col = true;
                                 },
                                 else => {},
                             },
@@ -1083,6 +1080,7 @@ pub const Editor = struct {
                                     for (cs.items[0..cs.len]) |*c| {
                                         c.head = cursorDown(content, c.head, col_px, win.font_size);
                                     }
+                                    keep_preferred_col = true;
                                 },
                                 'k' => {
                                     const ls = grapheme.lineStart(content, cs.items[0].head);
@@ -1091,6 +1089,7 @@ pub const Editor = struct {
                                     for (cs.items[0..cs.len]) |*c| {
                                         c.head = cursorUp(content, c.head, col_px, win.font_size);
                                     }
+                                    keep_preferred_col = true;
                                 },
                                 else => {},
                             },
@@ -1107,9 +1106,8 @@ pub const Editor = struct {
                     'H' => self.extendSelection(win, cs, .left),
                     'L' => self.extendSelection(win, cs, .right),
                     'x' => {
-                        const buf = self.getBuffer(win.buffer_id) orelse return;
+                        const buf = self.bufOf(win.buffer_id);
                         const content = buf.bytes();
-                        win.preferred_col = null;
                         for (cs.items[0..cs.len]) |*c| {
                             if (grapheme.lineStart(content, c.head) == grapheme.lineStart(content, c.anchor)) {
                                 c.anchor = grapheme.lineStart(content, c.head);
@@ -1119,9 +1117,8 @@ pub const Editor = struct {
                         }
                     },
                     'X' => {
-                        const buf = self.getBuffer(win.buffer_id) orelse return;
+                        const buf = self.bufOf(win.buffer_id);
                         const content = buf.bytes();
-                        win.preferred_col = null;
                         for (cs.items[0..cs.len]) |*c| {
                             if (grapheme.lineStart(content, c.head) == grapheme.lineStart(content, c.anchor)) {
                                 c.anchor = grapheme.findChars(content, c.head, "\n");
@@ -1133,19 +1130,17 @@ pub const Editor = struct {
                     'h' => {
                         if (cs.hasSelection()) {
                             cs.collapseToStart();
-                            win.preferred_col = null;
                         } else self.move(win, cs, .left);
                     },
                     'l' => {
                         if (cs.hasSelection()) {
                             cs.collapseToEnd();
-                            win.preferred_col = null;
                         } else self.move(win, cs, .right);
                     },
                     'k' => {
                         if (mods & MOD_ALT != 0) {
                             // Move line up
-                            const buf = self.getBuffer(win.buffer_id) orelse return;
+                            const buf = self.bufOf(win.buffer_id);
                             for (cs.items[0..cs.len]) |*c| {
                                 const content = buf.bytes();
                                 const ls = grapheme.lineStart(content, c.head);
@@ -1168,16 +1163,16 @@ pub const Editor = struct {
                                 c.head = prev_ls + @min(col_offset, la_len);
                                 c.anchor = c.head;
                             }
-                            win.preferred_col = null;
                         } else {
                             cs.clearSelections();
                             self.move(win, cs, .up);
+                            keep_preferred_col = true;
                         }
                     },
                     'j' => {
                         if (mods & MOD_ALT != 0) {
                             // Move line down
-                            const buf = self.getBuffer(win.buffer_id) orelse return;
+                            const buf = self.bufOf(win.buffer_id);
                             var idx = cs.len;
                             while (idx > 0) {
                                 idx -= 1;
@@ -1203,58 +1198,53 @@ pub const Editor = struct {
                                 c.head = ls + lb_len + 1 + @min(col_offset, la_len);
                                 c.anchor = c.head;
                             }
-                            win.preferred_col = null;
                         } else {
                             cs.clearSelections();
                             self.move(win, cs, .down);
+                            keep_preferred_col = true;
                         }
                     },
                     'w' => {
-                        const buf = self.getBuffer(win.buffer_id) orelse return;
+                        const buf = self.bufOf(win.buffer_id);
                         const content = buf.bytes();
                         for (cs.items[0..cs.len]) |*c| {
                             c.head = wordNext(content, c.head);
                             c.anchor = c.head;
                         }
-                        win.preferred_col = null;
                     },
                     'W' => {
-                        const buf = self.getBuffer(win.buffer_id) orelse return;
+                        const buf = self.bufOf(win.buffer_id);
                         const content = buf.bytes();
                         for (cs.items[0..cs.len]) |*c| {
                             c.head = wordNext(content, c.head);
                         }
-                        win.preferred_col = null;
                     },
                     'b' => {
-                        const buf = self.getBuffer(win.buffer_id) orelse return;
+                        const buf = self.bufOf(win.buffer_id);
                         const content = buf.bytes();
                         for (cs.items[0..cs.len]) |*c| {
                             c.head = wordPrev(content, c.head);
                             c.anchor = c.head;
                         }
-                        win.preferred_col = null;
                     },
                     'B' => {
-                        const buf = self.getBuffer(win.buffer_id) orelse return;
+                        const buf = self.bufOf(win.buffer_id);
                         const content = buf.bytes();
                         for (cs.items[0..cs.len]) |*c| {
                             c.head = wordPrev(content, c.head);
                         }
-                        win.preferred_col = null;
                     },
                     'i' => {
                         if (cs.hasSelection()) self.deleteSelections(win, cs);
                         win.mode = .insert;
                     },
                     'I' => {
-                        const buf = self.getBuffer(win.buffer_id) orelse return;
+                        const buf = self.bufOf(win.buffer_id);
                         const content = buf.bytes();
                         for (cs.items[0..cs.len]) |*c| {
                             c.head = grapheme.lineStart(content, c.head);
                             c.anchor = c.head;
                         }
-                        win.preferred_col = null;
                         win.mode = .insert;
                     },
                     '/' => self.openPalette(.search_forward) catch {},
@@ -1269,14 +1259,12 @@ pub const Editor = struct {
                         const m = findNextMatchFrom(self.palette.matches.items, cs.items[cs.len - 1].end()) orelse return;
                         cs.clear();
                         cs.insert(.{ .head = m.end, .anchor = m.start }) catch {};
-                        win.preferred_col = null;
                     },
                     'N' => {
                         self.requireFreshMatches();
                         if (self.palette.matches.items.len == 0 or cs.len == 0) return;
                         const m = findNextMatchFrom(self.palette.matches.items, cs.items[cs.len - 1].end()) orelse return;
                         cs.insert(.{ .head = m.end, .anchor = m.start }) catch {};
-                        win.preferred_col = null;
                     },
                     'p' => {
                         self.requireFreshMatches();
@@ -1284,19 +1272,17 @@ pub const Editor = struct {
                         const m = findPrevMatchFrom(self.palette.matches.items, cs.items[0].start()) orelse return;
                         cs.clear();
                         cs.insert(.{ .head = m.end, .anchor = m.start }) catch {};
-                        win.preferred_col = null;
                     },
                     'P' => {
                         self.requireFreshMatches();
                         if (self.palette.matches.items.len == 0 or cs.len == 0) return;
                         const m = findPrevMatchFrom(self.palette.matches.items, cs.items[0].start()) orelse return;
                         cs.insert(.{ .head = m.end, .anchor = m.start }) catch {};
-                        win.preferred_col = null;
                     },
                     '*' => {
                         if (cs.len == 0) return;
                         self.requireFreshMatches();
-                        const buf = self.getBuffer(win.buffer_id) orelse return;
+                        const buf = self.bufOf(win.buffer_id);
                         const content = buf.bytes();
                         if (self.palette.matches.items.len == 0) {
                             const c0 = cs.items[0];
@@ -1324,12 +1310,11 @@ pub const Editor = struct {
                                 cs.insert(.{ .head = m.end, .anchor = m.start }) catch break;
                             }
                         }
-                        win.preferred_col = null;
                     },
                     'o' => {
                         if (cs.len == 0) return;
                         var idx = cs.len;
-                        const buf = self.getBuffer(win.buffer_id) orelse return;
+                        const buf = self.bufOf(win.buffer_id);
                         while (idx > 0) {
                             idx -= 1;
                             const c = &cs.items[idx];
@@ -1339,12 +1324,11 @@ pub const Editor = struct {
                             c.anchor = c.head;
                         }
                         win.mode = .insert;
-                        win.preferred_col = null;
                     },
                     'O' => {
                         if (cs.len == 0) return;
                         var idx = cs.len;
-                        const buf = self.getBuffer(win.buffer_id) orelse return;
+                        const buf = self.bufOf(win.buffer_id);
                         while (idx > 0) {
                             idx -= 1;
                             const c = &cs.items[idx];
@@ -1354,12 +1338,11 @@ pub const Editor = struct {
                             c.anchor = c.head;
                         }
                         win.mode = .insert;
-                        win.preferred_col = null;
                     },
                     'd' => self.cut(win, cs),
                     'D' => {
                         if (cs.len == 0) return;
-                        const buf = self.getBuffer(win.buffer_id) orelse return;
+                        const buf = self.bufOf(win.buffer_id);
                         // Collect line ranges from current content, then merge overlapping.
                         const content = buf.bytes();
                         const Range = struct { start: usize, end: usize };
@@ -1389,18 +1372,16 @@ pub const Editor = struct {
                             i -= 1;
                             self.bufferDelete(win.buffer_id, merged[i].start, merged[i].end - merged[i].start);
                         }
-                        win.preferred_col = null;
                     },
                     'y' => self.yank(win, cs),
                     'Y' => self.paste(win, cs),
                     '\'' => {
-                        const buf = self.getBuffer(win.buffer_id) orelse return;
+                        const buf = self.bufOf(win.buffer_id);
                         const content = buf.bytes();
                         for (cs.items[0..cs.len]) |*c| {
                             c.head = grapheme.findChars(content, c.head, "\n");
                             c.anchor = c.head;
                         }
-                        win.preferred_col = null;
                         win.mode = .insert;
                     },
                     'u' => self.applyUndo(win, cs),
@@ -1411,7 +1392,7 @@ pub const Editor = struct {
                     ';' => self.execSneak(win, cs, win.sneak_c1, win.sneak_c2, win.sneak_forward),
                     ':' => self.execSneak(win, cs, win.sneak_c1, win.sneak_c2, !win.sneak_forward),
                     't' => {
-                        const buf = self.getBuffer(win.buffer_id) orelse return;
+                        const buf = self.bufOf(win.buffer_id);
                         const content = buf.bytes();
                         var idx = cs.len;
                         while (idx > 0) {
@@ -1433,10 +1414,9 @@ pub const Editor = struct {
                                 c.anchor = c.head;
                             }
                         }
-                        win.preferred_col = null;
                     },
                     'T' => {
-                        const buf = self.getBuffer(win.buffer_id) orelse return;
+                        const buf = self.bufOf(win.buffer_id);
                         const content = buf.bytes();
                         var idx = cs.len;
                         while (idx > 0) {
@@ -1472,7 +1452,6 @@ pub const Editor = struct {
                             c.head = (prev_head + rword_len) - lword_len;
                             c.anchor = c.head;
                         }
-                        win.preferred_col = null;
                     },
                     'g', 'c', 'a', 'A', '"' => { win.pending = .{ .prefix = @intCast(@intFromEnum(key)) }; },
                     'm' => { win.pending = .{ .prefix = 'm' }; },
@@ -1504,7 +1483,7 @@ pub const Editor = struct {
                 },
                 else => if (key.isPrintable() and mods & MOD_CTRL != 0 and @intFromEnum(key) == 'w') {
                     win.preferred_col = null;
-                    const buf = self.getBuffer(win.buffer_id) orelse return;
+                    const buf = self.bufOf(win.buffer_id);
                     const content = buf.bytes();
                     var it = cs.reverseIter();
                     while (it.next()) |cursor| {
