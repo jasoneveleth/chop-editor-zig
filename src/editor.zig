@@ -836,10 +836,8 @@ pub const Editor = struct {
                             .none => unreachable,
                             .ms => {
                                 const pair = surroundPair(@intCast(@intFromEnum(key)));
-                                var idx = cs.len;
-                                while (idx > 0) {
-                                    idx -= 1;
-                                    const c = &cs.items[idx];
+                                var it = cs.reverseIter();
+                                while (it.next()) |c| {
                                     const s = c.start();
                                     const e = c.end();
                                     self.bufferInsert(win.buffer_id, e, &[_]u8{pair.close}) catch continue;
@@ -848,10 +846,8 @@ pub const Editor = struct {
                             },
                             .md => {
                                 const ch: u8 = @intCast(@intFromEnum(key));
-                                var idx = cs.len;
-                                while (idx > 0) {
-                                    idx -= 1;
-                                    const c = &cs.items[idx];
+                                var it = cs.reverseIter();
+                                while (it.next()) |c| {
                                     if (surroundBounds(content, c.head, ch)) |b| {
                                         self.bufferDelete(win.buffer_id, b.end, 1);
                                         self.bufferDelete(win.buffer_id, b.start, 1);
@@ -866,10 +862,8 @@ pub const Editor = struct {
                             .mr2 => |char1| {
                                 const char2: u8 = @intCast(@intFromEnum(key));
                                 const pair2 = surroundPair(char2);
-                                var idx = cs.len;
-                                while (idx > 0) {
-                                    idx -= 1;
-                                    const c = &cs.items[idx];
+                                var it = cs.reverseIter();
+                                while (it.next()) |c| {
                                     if (surroundBounds(content, c.head, char1)) |b| {
                                         self.bufferDelete(win.buffer_id, b.end, 1);
                                         self.bufferInsert(win.buffer_id, b.end, &[_]u8{pair2.close}) catch {};
@@ -880,10 +874,8 @@ pub const Editor = struct {
                             },
                             .rl => {
                                 const ch: u8 = @intCast(@intFromEnum(key));
-                                var idx = cs.len;
-                                while (idx > 0) {
-                                    idx -= 1;
-                                    const c = &cs.items[idx];
+                                var it = cs.reverseIter();
+                                while (it.next()) |c| {
                                     const prev = cursorLeft(content, c.head);
                                     if (prev < c.head) {
                                         self.bufferDelete(win.buffer_id, prev, c.head - prev);
@@ -893,10 +885,8 @@ pub const Editor = struct {
                             },
                             .rr => {
                                 const ch: u8 = @intCast(@intFromEnum(key));
-                                var idx = cs.len;
-                                while (idx > 0) {
-                                    idx -= 1;
-                                    const c = &cs.items[idx];
+                                var it = cs.reverseIter();
+                                while (it.next()) |c| {
                                     const next = cursorRight(content, c.head);
                                     if (next > c.head) {
                                         self.bufferInsert(win.buffer_id, next, &[_]u8{ch}) catch {};
@@ -1173,10 +1163,8 @@ pub const Editor = struct {
                         if (mods & MOD_ALT != 0) {
                             // Move line down
                             const buf = self.bufOf(win.buffer_id);
-                            var idx = cs.len;
-                            while (idx > 0) {
-                                idx -= 1;
-                                const c = &cs.items[idx];
+                            var it = cs.reverseIter();
+                            while (it.next()) |c| {
                                 const content = buf.bytes();
                                 const ls = grapheme.lineStart(content, c.head);
                                 const le = grapheme.findChars(content, c.head, "\n");
@@ -1313,11 +1301,9 @@ pub const Editor = struct {
                     },
                     'o' => {
                         if (cs.len == 0) return;
-                        var idx = cs.len;
                         const buf = self.bufOf(win.buffer_id);
-                        while (idx > 0) {
-                            idx -= 1;
-                            const c = &cs.items[idx];
+                        var it = cs.reverseIter();
+                        while (it.next()) |c| {
                             const line_end = grapheme.findChars(buf.bytes(), c.head, "\n");
                             self.bufferInsert(win.buffer_id, line_end, "\n") catch continue;
                             c.head = line_end + 1;
@@ -1327,11 +1313,9 @@ pub const Editor = struct {
                     },
                     'O' => {
                         if (cs.len == 0) return;
-                        var idx = cs.len;
                         const buf = self.bufOf(win.buffer_id);
-                        while (idx > 0) {
-                            idx -= 1;
-                            const c = &cs.items[idx];
+                        var it = cs.reverseIter();
+                        while (it.next()) |c| {
                             const line_start = grapheme.lineStart(buf.bytes(), c.head);
                             self.bufferInsert(win.buffer_id, line_start, "\n") catch continue;
                             c.head = line_start;
@@ -1394,10 +1378,8 @@ pub const Editor = struct {
                     't' => {
                         const buf = self.bufOf(win.buffer_id);
                         const content = buf.bytes();
-                        var idx = cs.len;
-                        while (idx > 0) {
-                            idx -= 1;
-                            const c = &cs.items[idx];
+                        var it = cs.reverseIter();
+                        while (it.next()) |c| {
                             const prev = cursorLeft(content, c.head);
                             const next = cursorRight(content, c.head);
                             if (prev < c.head and next > c.head) {
@@ -1418,10 +1400,8 @@ pub const Editor = struct {
                     'T' => {
                         const buf = self.bufOf(win.buffer_id);
                         const content = buf.bytes();
-                        var idx = cs.len;
-                        while (idx > 0) {
-                            idx -= 1;
-                            const c = &cs.items[idx];
+                        var it = cs.reverseIter();
+                        while (it.next()) |c| {
                             // Find left word end, then start
                             if (c.head == 0 or (isWordChar(content[c.head]) and isWordChar(content[c.head-1]))) continue;
                             var lend = c.head;

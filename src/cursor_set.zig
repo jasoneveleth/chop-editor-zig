@@ -9,13 +9,13 @@ pub const CursorSetId = packed struct(u32) {
 };
 
 pub const ReverseIter = struct {
-    slice: []const Cursor,
+    slice: []Cursor,
     index: usize,
 
-    pub fn next(self: *ReverseIter) ?Cursor {
+    pub fn next(self: *ReverseIter) ?*Cursor {
         if (self.index == 0) return null;
         self.index -= 1;
-        return self.slice[self.index];
+        return &self.slice[self.index];
     }
 };
 
@@ -53,7 +53,7 @@ pub const CursorSet = struct {
         return self.items[0..self.len];
     }
 
-    pub fn reverseIter(self: *const CursorSet) ReverseIter {
+    pub fn reverseIter(self: *CursorSet) ReverseIter {
         return .{ .slice = self.items[0..self.len], .index = self.len };
     }
 
