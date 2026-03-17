@@ -17,6 +17,8 @@ const Match = @import("palette.zig").Match;
 const PaletteIntent = @import("palette.zig").PaletteIntent;
 const platform = @import("platform/web.zig");
 const grapheme = @import("grapheme.zig");
+const undo_mod = @import("undo.zig");
+const UndoStack = undo_mod.UndoHistory;
 
 const FILLER_TEXT = "Out of the night that covers me,\n      Black as the pit from pole to pole,\nI thank whatever gods may be\n      For my unconquerable soul.\n\nIn the fell clutch of circumstance\n      I have not winced nor cried aloud.\nUnder the bludgeonings of chance\n      My head is bloody, but unbowed.\n\nBeyond this place of wrath and tears\n      Looms but the Horror of the shade,\nAnd yet the menace of the years\n      Finds and shall find me unafraid.\n\nIt matters not how strait the gate,\n      How charged with punishments the scroll,\nI am the master of my fate,\n      I am the captain of my soul.";
 
@@ -237,6 +239,7 @@ pub const Editor = struct {
     last_input_ms: f64 = 0,
     dark_mode: bool = true,
     drag_anchor: ?usize = null,
+    undo_stack: UndoStack = .{},
 
     pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, dark_mode: bool) !Editor {
         var editor = Editor{
@@ -267,6 +270,7 @@ pub const Editor = struct {
     }
 
     pub fn deinit(self: *Editor) void {
+        self.undo_stack.deinit(self.allocator);
         self.palette.deinit(self.allocator);
         var it = self.buffer_cursor_sets.valueIterator();
         while (it.next()) |list| list.deinit(self.allocator);
@@ -325,13 +329,19 @@ pub const Editor = struct {
                 if (self.getCursorSet(cs_id)) |cs| cs.adjustForInsert(pos, text.len);
             }
         }
-        if (@as(u32, @bitCast(buffer_id)) != @as(u32, @bitCast(self.palette.buffer_id)))
+        if (@as(u32, @bitCast(buffer_id)) != @as(u32, @bitCast(self.palette.buffer_id))) {
             self.palette.matches_stale = true;
+            self.undo_stack.recordInsert(self.allocator, pos, text.len);
+        }
     }
 
     /// Delete from a buffer and fan out cursor adjustments to all watching cursor sets.
     pub fn bufferDelete(self: *Editor, buffer_id: BufferId, pos: usize, len: usize) void {
         const buf = self.getBuffer(buffer_id) orelse return;
+        if (@as(u32, @bitCast(buffer_id)) != @as(u32, @bitCast(self.palette.buffer_id))) {
+            const end = @min(pos + len, buf.content.items.len);
+            self.undo_stack.recordDelete(self.allocator, pos, buf.content.items[pos..end]);
+        }
         buf.delete(pos, len);
         const key: u32 = @bitCast(buffer_id);
         if (self.buffer_cursor_sets.get(key)) |ids| {
@@ -666,6 +676,7 @@ pub const Editor = struct {
             idx -= 1;
             const pos = cs.items[idx].head;
             buf_obj.insert(pos, text) catch continue;
+            self.undo_stack.recordInsert(self.allocator, pos, text.len);
             cs.items[idx].head = pos + (idx + 1) * text.len;
             cs.items[idx].anchor = cs.items[idx].head;
         }
@@ -766,12 +777,22 @@ pub const Editor = struct {
         win.preferred_col = null;
     }
 
+    fn applyUndo(self: *Editor, win: *Window, cs: *CursorSet) void {
+        const buf = self.getBuffer(win.buffer_id) orelse return;
+        self.undo_stack.undo(buf, cs);
+        win.preferred_col = null;
+        self.palette.matches_stale = true;
+    }
+
     pub fn onKeyDown(self: *Editor, time_ms: f64, key: Key, mods: u32) void {
         self.last_input_ms = time_ms;
         const win = self.getWindow(self.focused_window) orelse return;
         const cs = self.getCursorSet(win.cursor_set_id) orelse return;
         switch (win.mode) {
-            .normal => switch (key) {
+            .normal => {
+                self.undo_stack.begin(cs);
+                defer if (win.mode != .insert) self.undo_stack.commit(self.allocator);
+                switch (key) {
                 .escape => { win.pending = .none; },
                 .arrow_left => self.move(win, cs, .left),
                 .arrow_right => self.move(win, cs, .right),
@@ -1382,6 +1403,7 @@ pub const Editor = struct {
                         win.preferred_col = null;
                         win.mode = .insert;
                     },
+                    'u' => self.applyUndo(win, cs),
                     'r' => { win.pending = .rl; },
                     'R' => { win.pending = .rr; },
                     'f' => { win.pending = .{ .sf1 = true }; },
@@ -1457,9 +1479,13 @@ pub const Editor = struct {
                     else => {},
                     } // end single-key switch
                 }, // end pending_key else / isPrintable block
+                } // end switch(key)
             },
             .insert => switch (key) {
-                .escape => win.mode = .normal,
+                .escape => {
+                    self.undo_stack.commit(self.allocator);
+                    win.mode = .normal;
+                },
                 .arrow_left => self.move(win, cs, .left),
                 .arrow_right => self.move(win, cs, .right),
                 .arrow_up => self.move(win, cs, .up),
