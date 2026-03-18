@@ -1,0 +1,52 @@
+// Example: user types "hello", then " world", then undoes, then types " there"
+// Resulting in a branch: node0 → {node1=" world", node2=" there"}
+// current = node2 (seq 3, the active branch tip)
+
+digraph undo_tree {
+    graph [rankdir=TB, fontname="monospace"]
+    node  [fontname="monospace", shape=record]
+    edge  [fontname="monospace"]
+
+    // ── UndoHistory ────────────────────────────────────────────────────────
+    history [label="{UndoHistory|current = 2|next_seq = 4|nodes\[\]|ops\[\]|text\[\]}"]
+
+    // ── UndoNode array ─────────────────────────────────────────────────────
+    node0 [label="{UndoNode\[0\] seq=1|<parent>parent = NULL|<fchild>first_child = 2|<sibling>next_sibling = NULL|op_start=0  op_count=1|cursor_start=0  cursor_len=1}"]
+    node1 [label="{UndoNode\[1\] seq=2|<parent>parent = 0|<fchild>first_child = NULL|<sibling>next_sibling = NULL|op_start=1  op_count=1|cursor_start=512  cursor_len=1}"]
+    node2 [label="{UndoNode\[2\] seq=3|<parent>parent = 0|<fchild>first_child = NULL|<sibling>next_sibling = 1|op_start=2  op_count=1|cursor_start=1024  cursor_len=1}"]
+
+    // ── UndoOp array ───────────────────────────────────────────────────────
+    op0 [label="{UndoOp\[0\]|pos=0  len=5|<ts>text_start=0|insert}"]
+    op1 [label="{UndoOp\[1\]|pos=5  len=6|<ts>text_start=5|insert}"]
+    op2 [label="{UndoOp\[2\]|pos=5  len=6|<ts>text_start=11|insert}"]
+
+    // ── text[] byte store ──────────────────────────────────────────────────
+    textbuf [label="{text\[\]|[0..4]  = \"hello\"|[5..10] = \" world\"|[11..16] = \" there\"}"]
+
+    // ── CursorPool ─────────────────────────────────────────────────────────
+    pool [label="{CursorPool.slab|[0]    head=0 anchor=0  (pre seq=1)|[512]  head=5 anchor=5  (pre seq=2)|[1024] head=5 anchor=5  (pre seq=3)}"]
+
+    // ── Edges ──────────────────────────────────────────────────────────────
+
+    history -> node2  [label="current", style=bold, color=blue]
+    history -> node0  [label="nodes[0]", style=dashed]
+    history -> op0    [label="ops[0]",   style=dashed]
+    history -> textbuf[label="text[0]",  style=dashed]
+
+    node0:fchild  -> node2 [label="first_child"]
+    node2:sibling -> node1 [label="next_sibling"]
+    node1:parent  -> node0 [label="parent"]
+    node2:parent  -> node0 [label="parent"]
+
+    node0 -> op0 [label="op_start", style=dashed, color=gray]
+    node1 -> op1 [label="op_start", style=dashed, color=gray]
+    node2 -> op2 [label="op_start", style=dashed, color=gray]
+
+    op0:ts -> textbuf [label="\"hello\"",  style=dotted]
+    op1:ts -> textbuf [label="\" world\"", style=dotted]
+    op2:ts -> textbuf [label="\" there\"", style=dotted]
+
+    node0 -> pool [label="cursor_start=0",    style=dotted, color=darkgreen]
+    node1 -> pool [label="cursor_start=512",  style=dotted, color=darkgreen]
+    node2 -> pool [label="cursor_start=1024", style=dotted, color=darkgreen]
+}

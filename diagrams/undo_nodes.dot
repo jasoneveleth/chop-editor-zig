@@ -1,0 +1,66 @@
+// 6-node undo tree showing branching structure.
+//
+// History of edits:
+//   seq 1: edit at root
+//   seq 2: edit from node0
+//   seq 3: edit from node1  (deepens main branch)
+//   undo undo undo → back to NULL
+//   seq 4: edit from NULL   (new branch off root)
+//   seq 5: edit from node3
+//   undo → back to node3
+//   seq 6: edit from node3  (second branch off node3)
+//
+// Tree:
+//   NULL
+//    └── node0 (seq=1)
+//         └── node1 (seq=2)
+//              └── node2 (seq=3)
+//    └── node3 (seq=4)          ← separate branch from NULL
+//         ├── node4 (seq=5)
+//         └── node5 (seq=6)     ← current
+//
+// child lists use first_child / next_sibling singly-linked lists
+
+digraph undo_nodes {
+    graph [rankdir=TB, fontname="monospace", nodesep=0.6, ranksep=0.8]
+    node  [fontname="monospace", shape=record]
+    edge  [fontname="monospace"]
+
+    null_node [label="{NULL (initial state)}"]
+
+    n0 [label="{UndoNode[0] seq=1|<p>parent = NULL|<fc>first_child = 1|<ns>next_sibling = NULL}"]
+    n1 [label="{UndoNode[1] seq=2|<p>parent = 0|<fc>first_child = 2|<ns>next_sibling = NULL}"]
+    n2 [label="{UndoNode[2] seq=3|<p>parent = 1|<fc>first_child = NULL|<ns>next_sibling = NULL}"]
+    n3 [label="{UndoNode[3] seq=4|<p>parent = NULL|<fc>first_child = 4|<ns>next_sibling = 0}"]
+    n4 [label="{UndoNode[4] seq=5|<p>parent = 3|<fc>first_child = NULL|<ns>next_sibling = NULL}"]
+    n5 [label="{UndoNode[5] seq=6  ★ current|<p>parent = 3|<fc>first_child = NULL|<ns>next_sibling = 4}"]
+
+    // invisible edges establish tree depth (root→leaves)
+    null_node -> n0 [style=invis]
+    null_node -> n3 [style=invis]
+    n0 -> n1        [style=invis]
+    n1 -> n2        [style=invis]
+    n3 -> n4        [style=invis]
+    n3 -> n5        [style=invis]
+
+    // same-rank groupings keep siblings on the same row
+    { rank=same; n0; n3 }
+    { rank=same; n1; n4; n5 }
+    { rank=same; n2 }
+
+    // parent edges (constraint=false so they don't override the layout above)
+    n0:p -> null_node [label="parent",       constraint=false]
+    n1:p -> n0        [label="parent",       constraint=false]
+    n2:p -> n1        [label="parent",       constraint=false]
+    n3:p -> null_node [label="parent",       constraint=false]
+    n4:p -> n3        [label="parent",       constraint=false]
+    n5:p -> n3        [label="parent",       constraint=false]
+
+    // first_child edges
+    n0:fc -> n1 [label="first_child", color=blue, constraint=false]
+    n1:fc -> n2 [label="first_child", color=blue, constraint=false]
+    n3:fc -> n4 [label="first_child", color=blue, constraint=false]
+
+    // next_sibling values are visible in the fields; omitted as edges
+    // because Graphviz cannot draw edges between same-rank record nodes
+}
