@@ -18,7 +18,7 @@ pub const NULL_NODE = UndoNodeIdx.null_node;
 pub const UndoOp = struct {
     pos:        u32,
     len:        u32,
-    text_start: UndoTextIdx, // only meaningful for delete ops, an offset into UndoHistory.text
+    text_start: UndoTextIdx,
     kind:       enum(u8) { insert, delete },
 };
 
@@ -32,13 +32,15 @@ pub const UndoNode = struct {
     op_count:     u32,
     cursor_start: CursorPoolIdx,
     cursor_len:   u32,
+    sequence:     u32, // monotonically increasing commit order
 };
 
 pub const UndoHistory = struct {
-    nodes:   std.ArrayList(UndoNode) = .{},
-    ops:     std.ArrayList(UndoOp)   = .{},
-    text:    std.ArrayList(u8)       = .{},
-    current: UndoNodeIdx = NULL_NODE,
+    nodes:    std.ArrayList(UndoNode) = .{},
+    ops:      std.ArrayList(UndoOp)   = .{},
+    text:     std.ArrayList(u8)       = .{},
+    current:  UndoNodeIdx = NULL_NODE,
+    next_seq: u32         = 1,
 
     // In-progress frame
     recording:            bool         = false,
@@ -82,7 +84,9 @@ pub const UndoHistory = struct {
             .op_count     = @intCast(self.ops.items.len - @intFromEnum(self.pending_op_start)),
             .cursor_start = self.pending_cursor_start,
             .cursor_len   = self.pending_cursor_len,
+            .sequence     = self.next_seq,
         };
+        self.next_seq += 1;
 
         if (self.current != NULL_NODE) {
             node.next_sibling = self.nodes.items[@intFromEnum(self.current)].first_child;
@@ -106,14 +110,19 @@ pub const UndoHistory = struct {
         self.text.items = self.text.items[0..@intFromEnum(self.pending_text_start)];
     }
 
-    pub fn recordInsert(self: *UndoHistory, allocator: std.mem.Allocator, pos: usize, len: usize) void {
+    /// Record an insertion; stores the inserted text so it can be replayed on redo.
+    pub fn recordInsert(self: *UndoHistory, allocator: std.mem.Allocator, pos: usize, text: []const u8) void {
         if (!self.recording) return;
+        const text_start: UndoTextIdx = @enumFromInt(self.text.items.len);
+        self.text.appendSlice(allocator, text) catch return;
         self.ops.append(allocator, .{
             .pos        = @intCast(pos),
-            .len        = @intCast(len),
-            .text_start = @enumFromInt(0),
+            .len        = @intCast(text.len),
+            .text_start = text_start,
             .kind       = .insert,
-        }) catch {};
+        }) catch {
+            self.text.items = self.text.items[0..@intFromEnum(text_start)];
+        };
     }
 
     pub fn recordDelete(self: *UndoHistory, allocator: std.mem.Allocator, pos: usize, bytes: []const u8) void {
@@ -132,6 +141,28 @@ pub const UndoHistory = struct {
 
     pub fn canUndo(self: *const UndoHistory) bool {
         return self.current != NULL_NODE;
+    }
+
+    /// Redo the most recently committed child of the current node.
+    /// When current is NULL_NODE (initial state), redoes the most recently
+    /// committed top-level node.
+    pub fn redo(self: *UndoHistory, buf: *Buffer, cs: *CursorSet, pool: *CursorPool) void {
+        const child = if (self.current != NULL_NODE)
+            self.nodes.items[@intFromEnum(self.current)].first_child
+        else blk: {
+            // Find the node with parent=NULL_NODE that was committed most recently.
+            var best = NULL_NODE;
+            var best_seq: u32 = 0;
+            for (self.nodes.items, 0..) |node, i| {
+                if (node.parent == NULL_NODE and node.sequence > best_seq) {
+                    best_seq = node.sequence;
+                    best = @enumFromInt(i);
+                }
+            }
+            break :blk best;
+        };
+        if (child == NULL_NODE) return;
+        self.redoNode(buf, cs, pool, child);
     }
 
     /// Reverse the current node's ops on `buf`, restore its cursors into `cs`
@@ -154,5 +185,101 @@ pub const UndoHistory = struct {
         }
         cs.restoreFrom(pool, node.cursor_start, node.cursor_len);
         self.current = node.parent;
+    }
+
+    /// Apply a node's ops in forward order (used when redoing after a branch switch).
+    /// Restores the node's pre-op cursor snapshot and advances `current` to node_idx.
+    fn redoNode(self: *UndoHistory, buf: *Buffer, cs: *CursorSet, pool: *CursorPool, node_idx: UndoNodeIdx) void {
+        const node = &self.nodes.items[@intFromEnum(node_idx)];
+        const op_start = @intFromEnum(node.op_start);
+        const op_end   = op_start + node.op_count;
+        for (self.ops.items[op_start..op_end]) |op| {
+            switch (op.kind) {
+                .insert => buf.insert(
+                    op.pos,
+                    self.text.items[@intFromEnum(op.text_start) .. @intFromEnum(op.text_start) + op.len],
+                ) catch {},
+                .delete => buf.delete(op.pos, op.len),
+            }
+        }
+        cs.restoreFrom(pool, node.cursor_start, node.cursor_len);
+        self.current = node_idx;
+    }
+
+    /// Walk the undo tree to reach `target` (may be NULL_NODE for initial state).
+    /// Finds the lowest common ancestor of `current` and `target`, undoes to it,
+    /// then redoes down to `target`.
+    fn navigateTo(self: *UndoHistory, buf: *Buffer, cs: *CursorSet, pool: *CursorPool, target: UndoNodeIdx) void {
+        if (self.current == target) return;
+
+        // Collect ancestor chain of current (including NULL_NODE sentinel at end).
+        var cur_path: [1024]UndoNodeIdx = undefined;
+        var cur_len: usize = 0;
+        {
+            var n = self.current;
+            while (cur_len < cur_path.len) {
+                cur_path[cur_len] = n;
+                cur_len += 1;
+                if (n == NULL_NODE) break;
+                n = self.nodes.items[@intFromEnum(n)].parent;
+            }
+        }
+
+        // Walk up from target collecting the path down; stop at the LCA.
+        var path_down: [1024]UndoNodeIdx = undefined;
+        var path_down_len: usize = 0;
+        var lca = NULL_NODE;
+        outer: {
+            var n = target;
+            while (path_down_len < path_down.len) {
+                for (cur_path[0..cur_len]) |a| {
+                    if (a == n) { lca = n; break :outer; }
+                }
+                path_down[path_down_len] = n;
+                path_down_len += 1;
+                if (n == NULL_NODE) break; // shouldn't happen; NULL_NODE is always in cur_path
+                n = self.nodes.items[@intFromEnum(n)].parent;
+            }
+        }
+
+        // Undo from current up to lca.
+        while (self.current != lca) self.undo(buf, cs, pool);
+
+        // Redo from lca down to target (path_down is stored target→lca, so iterate in reverse).
+        var i = path_down_len;
+        while (i > 0) { i -= 1; self.redoNode(buf, cs, pool, path_down[i]); }
+    }
+
+    /// Move to the most recent commit older than the current one (alt+u).
+    pub fn undoOlder(self: *UndoHistory, buf: *Buffer, cs: *CursorSet, pool: *CursorPool) void {
+        if (self.current == NULL_NODE) return;
+        const cur_seq = self.nodes.items[@intFromEnum(self.current)].sequence;
+
+        var target = NULL_NODE; // default: go to initial state (before all commits)
+        var best_seq: u32 = 0;
+        for (self.nodes.items, 0..) |node, i| {
+            if (node.sequence < cur_seq and node.sequence > best_seq) {
+                best_seq = node.sequence;
+                target = @enumFromInt(i);
+            }
+        }
+        self.navigateTo(buf, cs, pool, target);
+    }
+
+    /// Move to the most recent commit newer than the current one (alt+U).
+    pub fn undoNewer(self: *UndoHistory, buf: *Buffer, cs: *CursorSet, pool: *CursorPool) void {
+        const cur_seq: u32 = if (self.current == NULL_NODE) 0
+                             else self.nodes.items[@intFromEnum(self.current)].sequence;
+
+        var target = NULL_NODE;
+        var best_seq: u32 = std.math.maxInt(u32);
+        for (self.nodes.items, 0..) |node, i| {
+            if (node.sequence > cur_seq and node.sequence < best_seq) {
+                best_seq = node.sequence;
+                target = @enumFromInt(i);
+            }
+        }
+        if (target == NULL_NODE) return; // already at newest
+        self.navigateTo(buf, cs, pool, target);
     }
 };

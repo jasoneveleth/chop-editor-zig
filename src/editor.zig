@@ -342,7 +342,7 @@ pub const Editor = struct {
         }
         if (@as(u32, @bitCast(buffer_id)) != @as(u32, @bitCast(self.palette.buffer_id))) {
             self.palette.matches_stale = true;
-            self.undo_stack.recordInsert(self.allocator, pos, text.len);
+            self.undo_stack.recordInsert(self.allocator, pos, text);
         }
     }
 
@@ -696,7 +696,7 @@ pub const Editor = struct {
             const items = cs.iter(&self.cursor_pool);
             const pos = items[idx].head;
             buf_obj.insert(pos, text) catch continue;
-            self.undo_stack.recordInsert(self.allocator, pos, text.len);
+            self.undo_stack.recordInsert(self.allocator, pos, text);
             items[idx].head = pos + (idx + 1) * text.len;
             items[idx].anchor = items[idx].head;
         }
@@ -800,6 +800,27 @@ pub const Editor = struct {
     fn applyUndo(self: *Editor, win: *Window, cs: *CursorSet) void {
         const buf = self.bufOf(win.buffer_id);
         self.undo_stack.undo(buf, cs, &self.cursor_pool);
+        win.preferred_col = null;
+        self.palette.matches_stale = true;
+    }
+
+    fn applyRedo(self: *Editor, win: *Window, cs: *CursorSet) void {
+        const buf = self.bufOf(win.buffer_id);
+        self.undo_stack.redo(buf, cs, &self.cursor_pool);
+        win.preferred_col = null;
+        self.palette.matches_stale = true;
+    }
+
+    fn applyUndoOlder(self: *Editor, win: *Window, cs: *CursorSet) void {
+        const buf = self.bufOf(win.buffer_id);
+        self.undo_stack.undoOlder(buf, cs, &self.cursor_pool);
+        win.preferred_col = null;
+        self.palette.matches_stale = true;
+    }
+
+    fn applyUndoNewer(self: *Editor, win: *Window, cs: *CursorSet) void {
+        const buf = self.bufOf(win.buffer_id);
+        self.undo_stack.undoNewer(buf, cs, &self.cursor_pool);
         win.preferred_col = null;
         self.palette.matches_stale = true;
     }
@@ -1387,7 +1408,10 @@ pub const Editor = struct {
                         }
                         win.mode = .insert;
                     },
-                    'u' => self.applyUndo(win, cs),
+                    'u' => if (mods & MOD_ALT != 0) self.applyUndoOlder(win, cs)
+                           else self.applyUndo(win, cs),
+                    'U' => if (mods & MOD_ALT != 0) self.applyUndoNewer(win, cs)
+                           else self.applyRedo(win, cs),
                     'r' => { win.pending = .rl; },
                     'R' => { win.pending = .rr; },
                     'f' => { win.pending = .{ .sf1 = true }; },
