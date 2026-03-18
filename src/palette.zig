@@ -26,7 +26,7 @@ pub const Palette = struct {
             .buffer_id = buffer_id,
             .cursor_set_id = cursor_set_id,
             // start=0 is a safe sentinel; len=0 means no cursors to restore.
-            .saved_cursors = CursorSet.init(buffer_id, 0),
+            .saved_cursors = CursorSet.init(buffer_id, @enumFromInt(0)),
             .matches = .{},
         };
     }

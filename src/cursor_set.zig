@@ -4,6 +4,9 @@ const BufferId = @import("buffer.zig").BufferId;
 
 pub const MAX_CURSORS = 512;
 
+/// An offset into CursorPool.slab (distinct from CursorSetId, UndoNodeIdx, etc.)
+pub const CursorPoolIdx = enum(u32) { _ };
+
 pub const CursorSetId = packed struct(u32) {
     index: u24,
     generation: u8,
@@ -20,24 +23,24 @@ pub const CursorPool = struct {
     }
 
     /// Pre-allocate `count` uninitialised slots; returns start index.
-    pub fn allocSlots(self: *CursorPool, allocator: std.mem.Allocator, count: u32) !u32 {
-        const start: u32 = @intCast(self.slab.items.len);
+    pub fn allocSlots(self: *CursorPool, allocator: std.mem.Allocator, count: u32) !CursorPoolIdx {
+        const start: CursorPoolIdx = @enumFromInt(self.slab.items.len);
         try self.slab.resize(allocator, self.slab.items.len + count);
         return start;
     }
 
     /// Copy `src_start..src_start+len` into a *new* pool region (safe even
     /// when src lives inside this pool — copies to a temp buffer first).
-    pub fn snapshotRange(self: *CursorPool, allocator: std.mem.Allocator, src_start: u32, len: u32) !u32 {
+    pub fn snapshotRange(self: *CursorPool, allocator: std.mem.Allocator, src_start: CursorPoolIdx, len: u32) !CursorPoolIdx {
         var tmp: [MAX_CURSORS]Cursor = undefined;
-        @memcpy(tmp[0..len], self.slab.items[src_start..][0..len]);
-        const start: u32 = @intCast(self.slab.items.len);
+        @memcpy(tmp[0..len], self.slab.items[@intFromEnum(src_start)..][0..len]);
+        const start: CursorPoolIdx = @enumFromInt(self.slab.items.len);
         try self.slab.appendSlice(allocator, tmp[0..len]);
         return start;
     }
 
-    pub fn slice(self: *const CursorPool, start: u32, len: u32) []Cursor {
-        return self.slab.items[start..][0..len];
+    pub fn slice(self: *const CursorPool, start: CursorPoolIdx, len: u32) []Cursor {
+        return self.slab.items[@intFromEnum(start)..][0..len];
     }
 };
 
@@ -58,10 +61,10 @@ pub const ReverseIter = struct {
 /// pool regions written by CursorPool.snapshotRange.
 pub const CursorSet = struct {
     buffer_id: BufferId,
-    start: u32,   // fixed, immutable after creation
+    start: CursorPoolIdx,   // fixed, immutable after creation
     len: u32,
 
-    pub fn init(buffer_id: BufferId, start: u32) CursorSet {
+    pub fn init(buffer_id: BufferId, start: CursorPoolIdx) CursorSet {
         return .{ .buffer_id = buffer_id, .start = start, .len = 0 };
     }
 
@@ -132,10 +135,10 @@ pub const CursorSet = struct {
     }
 
     /// Overwrite this set's live region with data from a snapshot region.
-    pub fn restoreFrom(self: *CursorSet, pool: *CursorPool, snap_start: u32, snap_len: u32) void {
+    pub fn restoreFrom(self: *CursorSet, pool: *CursorPool, snap_start: CursorPoolIdx, snap_len: u32) void {
         @memcpy(
             pool.slice(self.start, snap_len),
-            pool.slab.items[snap_start..][0..snap_len],
+            pool.slab.items[@intFromEnum(snap_start)..][0..snap_len],
         );
         self.len = snap_len;
     }
