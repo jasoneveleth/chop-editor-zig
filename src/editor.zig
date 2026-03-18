@@ -942,18 +942,6 @@ pub const Editor = struct {
                             },
                             .prefix => |pending| switch (pending) {
                             'g' => switch (@intFromEnum(key)) {
-                                'h' => {
-                                    for (cs.iter(&self.cursor_pool)) |*c| {
-                                        c.head = grapheme.lineStart(content, c.head);
-                                        c.anchor = c.head;
-                                    }
-                                },
-                                'l' => {
-                                    for (cs.iter(&self.cursor_pool)) |*c| {
-                                        c.head = grapheme.findChars(content, c.head, "\n");
-                                        c.anchor = c.head;
-                                    }
-                                },
                                 'k' => {
                                     const first_line_end = grapheme.findChars(content, 0, "\n");
                                     for (cs.iter(&self.cursor_pool)) |*c| {
@@ -1135,6 +1123,36 @@ pub const Editor = struct {
                     } else switch (@intFromEnum(key)) {
                     'H' => self.extendSelection(win, cs, .left),
                     'L' => self.extendSelection(win, cs, .right),
+                    '[' => {
+                        const buf = self.bufOf(win.buffer_id);
+                        const content = buf.bytes();
+                        for (cs.iter(&self.cursor_pool)) |*c| {
+                            c.head = grapheme.lineStart(content, c.head);
+                            c.anchor = c.head;
+                        }
+                    },
+                    ']' => {
+                        const buf = self.bufOf(win.buffer_id);
+                        const content = buf.bytes();
+                        for (cs.iter(&self.cursor_pool)) |*c| {
+                            c.head = grapheme.findChars(content, c.head, "\n");
+                            c.anchor = c.head;
+                        }
+                    },
+                    '{' => {
+                        const buf = self.bufOf(win.buffer_id);
+                        const content = buf.bytes();
+                        for (cs.iter(&self.cursor_pool)) |*c| {
+                            c.head = grapheme.lineStart(content, c.head);
+                        }
+                    },
+                    '}' => {
+                        const buf = self.bufOf(win.buffer_id);
+                        const content = buf.bytes();
+                        for (cs.iter(&self.cursor_pool)) |*c| {
+                            c.head = grapheme.findChars(content, c.head, "\n");
+                        }
+                    },
                     'x' => {
                         const buf = self.bufOf(win.buffer_id);
                         const content = buf.bytes();
