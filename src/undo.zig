@@ -2,7 +2,7 @@ const std = @import("std");
 const Buffer = @import("buffer.zig").Buffer;
 const Cursor = @import("cursor.zig").Cursor;
 const CursorSet = @import("cursor_set.zig").CursorSet;
-const MAX_CURSORS = @import("cursor_set.zig").MAX_CURSORS;
+const CursorPool = @import("cursor_set.zig").CursorPool;
 
 /// Sentinel: "no node".
 pub const NULL_NODE: u32 = std.math.maxInt(u32);
@@ -14,15 +14,16 @@ pub const UndoOp = struct {
     kind:       enum(u8) { insert, delete },
 };
 
-/// An undo group (one normal-mode command or one insert session)
+/// An undo group (one normal-mode command or one insert session).
+/// cursor_start/cursor_len index into the *live* CursorPool (pre-op snapshot).
 pub const UndoNode = struct {
     parent:       u32,
     first_child:  u32,
     next_sibling: u32,
     op_start:     u32,
     op_count:     u32,
+    cursor_start: u32,
     cursor_len:   u32,
-    cursors:      [MAX_CURSORS]Cursor,
 };
 
 pub const UndoHistory = struct {
@@ -31,12 +32,12 @@ pub const UndoHistory = struct {
     text:    std.ArrayList(u8)       = .{},
     current: u32 = NULL_NODE,
 
-    // In-progress frame 
-    recording:          bool = false,
-    pending_op_start:   u32  = 0,
-    pending_text_start: u32  = 0,
-    pending_cursors:    [MAX_CURSORS]Cursor = undefined,
-    pending_cursor_len: u32  = 0,
+    // In-progress frame
+    recording:            bool = false,
+    pending_op_start:     u32  = 0,
+    pending_text_start:   u32  = 0,
+    pending_cursor_start: u32  = 0,
+    pending_cursor_len:   u32  = 0,
 
     pub fn deinit(self: *UndoHistory, allocator: std.mem.Allocator) void {
         self.text.deinit(allocator);
@@ -44,16 +45,21 @@ pub const UndoHistory = struct {
         self.nodes.deinit(allocator);
     }
 
-    /// Begin a new undo group. Saves cursor state (restored on undo).
-    pub fn begin(self: *UndoHistory, cs: *const CursorSet) void {
-        self.recording          = true;
-        self.pending_op_start   = @intCast(self.ops.items.len);
+    /// Begin a new undo group.  Snapshots cursor state (via pool) for restore on undo.
+    pub fn begin(self: *UndoHistory, allocator: std.mem.Allocator, cs: *const CursorSet, pool: *CursorPool) void {
+        self.recording        = true;
+        self.pending_op_start = @intCast(self.ops.items.len);
         self.pending_text_start = @intCast(self.text.items.len);
-        self.pending_cursor_len = @intCast(cs.len);
-        @memcpy(self.pending_cursors[0..cs.len], cs.items[0..cs.len]);
+        if (pool.snapshotRange(allocator, cs.start, cs.len)) |snap_start| {
+            self.pending_cursor_start = snap_start;
+            self.pending_cursor_len   = cs.len;
+        } else |_| {
+            self.pending_cursor_start = 0;
+            self.pending_cursor_len   = 0;
+        }
     }
 
-    /// Commit the group. Discards silently if no ops were recorded.
+    /// Commit the group.  Discards silently if no ops were recorded.
     pub fn commit(self: *UndoHistory, allocator: std.mem.Allocator) void {
         if (!self.recording) return;
         self.recording = false;
@@ -66,13 +72,9 @@ pub const UndoHistory = struct {
             .next_sibling = NULL_NODE,
             .op_start     = self.pending_op_start,
             .op_count     = @intCast(self.ops.items.len - self.pending_op_start),
+            .cursor_start = self.pending_cursor_start,
             .cursor_len   = self.pending_cursor_len,
-            .cursors      = undefined,
         };
-        @memcpy(
-            node.cursors[0..self.pending_cursor_len],
-            self.pending_cursors[0..self.pending_cursor_len],
-        );
 
         if (self.current != NULL_NODE) {
             node.next_sibling = self.nodes.items[self.current].first_child;
@@ -116,7 +118,6 @@ pub const UndoHistory = struct {
             .text_start = text_start,
             .kind       = .delete,
         }) catch {
-            // Roll back the text bytes we just appended.
             self.text.items = self.text.items[0..text_start];
         };
     }
@@ -125,9 +126,9 @@ pub const UndoHistory = struct {
         return self.current != NULL_NODE;
     }
 
-    /// Reverse the current node's ops on `buf`, restore its cursors into `cs`,
-    /// then move `current` to the parent node.
-    pub fn undo(self: *UndoHistory, buf: *Buffer, cs: *CursorSet) void {
+    /// Reverse the current node's ops on `buf`, restore its cursors into `cs`
+    /// via the shared pool, then move `current` to the parent node.
+    pub fn undo(self: *UndoHistory, buf: *Buffer, cs: *CursorSet, pool: *CursorPool) void {
         if (self.current == NULL_NODE) return;
         const node = &self.nodes.items[self.current];
         const op_end = node.op_start + node.op_count;
@@ -143,10 +144,7 @@ pub const UndoHistory = struct {
                 ) catch {},
             }
         }
-        cs.clear();
-        for (node.cursors[0..node.cursor_len]) |cursor| {
-            cs.insert(cursor) catch break;
-        }
+        cs.restoreFrom(pool, node.cursor_start, node.cursor_len);
         self.current = node.parent;
     }
 };

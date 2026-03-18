@@ -4,6 +4,7 @@ const Buffer = @import("buffer.zig").Buffer;
 const BufferId = @import("buffer.zig").BufferId;
 const CursorSet = @import("cursor_set.zig").CursorSet;
 const CursorSetId = @import("cursor_set.zig").CursorSetId;
+const CursorPool = @import("cursor_set.zig").CursorPool;
 const Match = @import("palette.zig").Match;
 // Hardcoded to web for now — measureText is needed during layout.
 const platform = @import("platform/web.zig");
@@ -62,7 +63,7 @@ pub const Window = struct {
 
     // No deinit — Window owns no heap memory.
 
-    pub fn buildDrawList(self: *Window, dl: *draw.DrawList, buf: *const Buffer, cs: *const CursorSet, highlights: []const Match, cursor_visible: bool, dark_mode: bool) !void {
+    pub fn buildDrawList(self: *Window, dl: *draw.DrawList, buf: *const Buffer, cs: *const CursorSet, pool: *const CursorPool, highlights: []const Match, cursor_visible: bool, dark_mode: bool) !void {
         const bg_color   = if (dark_mode) draw.Color.rgb(27, 27, 27)   else draw.Color.rgb(247, 247, 247);
         const text_color = if (dark_mode) draw.Color.rgb(204, 204, 204) else draw.Color.rgb(27, 27, 27);
 
@@ -87,7 +88,7 @@ pub const Window = struct {
                 const baseline = line_y + self.font_size;
                 if (baseline >= 0 and line_y < self.height) {
                     // Draw selection highlights.
-                    for (cs.iter()) |cursor| {
+                    for (cs.iter(pool)) |cursor| {
                         if (!cursor.isSelection()) continue;
                         const ov_s = @max(cursor.start(), line_start);
                         const ov_e = @min(cursor.end(), i);
@@ -129,7 +130,7 @@ pub const Window = struct {
         const insert_color = draw.Color.rgb(255, 116, 108); // #FFA66C
         const cursor_color = if (self.mode == .insert) insert_color else normal_color;
 
-        for (cs.iter()) |cursor| {
+        for (cs.iter(pool)) |cursor| {
             var cl_start: usize = 0;
             var cl_y: f32 = -self.scroll_y;
             var j: usize = 0;

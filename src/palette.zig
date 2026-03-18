@@ -14,6 +14,7 @@ pub const Palette = struct {
     buffer_id: BufferId,
     cursor_set_id: CursorSetId,
     /// Snapshot of focused window's cursor set, restored on Escape.
+    /// start=0,len=0 until first openPalette call sets a real snapshot.
     saved_cursors: CursorSet,
     /// All match positions in the focused buffer, recomputed on each keystroke.
     matches: std.ArrayList(Match),
@@ -24,7 +25,8 @@ pub const Palette = struct {
         return .{
             .buffer_id = buffer_id,
             .cursor_set_id = cursor_set_id,
-            .saved_cursors = CursorSet.init(buffer_id),
+            // start=0 is a safe sentinel; len=0 means no cursors to restore.
+            .saved_cursors = CursorSet.init(buffer_id, 0),
             .matches = .{},
         };
     }

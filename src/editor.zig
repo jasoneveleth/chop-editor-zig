@@ -7,6 +7,8 @@ const WindowId = @import("window.zig").WindowId;
 const PendingState = @import("window.zig").PendingState;
 const CursorSet = @import("cursor_set.zig").CursorSet;
 const CursorSetId = @import("cursor_set.zig").CursorSetId;
+const CursorPool = @import("cursor_set.zig").CursorPool;
+const MAX_CURSORS = @import("cursor_set.zig").MAX_CURSORS;
 const Cursor = @import("cursor.zig").Cursor;
 const Key = @import("key.zig").Key;
 const MOD_CTRL = @import("key.zig").MOD_CTRL;
@@ -232,6 +234,7 @@ pub const Editor = struct {
     windows: std.ArrayList(Window),
     buffers: std.ArrayList(Buffer),
     cursor_sets: std.ArrayList(CursorSet),
+    cursor_pool: CursorPool,
     /// Maps BufferId (bit-cast to u32) → list of CursorSetIds watching that buffer.
     buffer_cursor_sets: std.AutoHashMap(u32, std.ArrayList(CursorSetId)),
     focused_window: WindowId,
@@ -247,6 +250,7 @@ pub const Editor = struct {
             .windows = .{},
             .buffers = .{},
             .cursor_sets = .{},
+            .cursor_pool = .{},
             .buffer_cursor_sets = std.AutoHashMap(u32, std.ArrayList(CursorSetId)).init(allocator),
             .focused_window = undefined,
             .palette = undefined,
@@ -257,13 +261,13 @@ pub const Editor = struct {
         const buf_id = try editor.createBuffer();
         editor.getBuffer(buf_id).?.insert(0, FILLER_TEXT) catch {};
         const cs_id = try editor.createCursorSet(buf_id);
-        try editor.getCursorSet(cs_id).?.insert(Cursor.init(0));
+        try editor.getCursorSet(cs_id).?.insert(&editor.cursor_pool, Cursor.init(0));
         editor.focused_window = try editor.createWindow(buf_id, cs_id, width, height);
 
         // Palette buffer + cursor set (empty, cleared on each open).
         const pal_buf_id = try editor.createBuffer();
         const pal_cs_id = try editor.createCursorSet(pal_buf_id);
-        try editor.getCursorSet(pal_cs_id).?.insert(Cursor.init(0));
+        try editor.getCursorSet(pal_cs_id).?.insert(&editor.cursor_pool, Cursor.init(0));
         editor.palette = Palette.init(pal_buf_id, pal_cs_id);
 
         return editor;
@@ -276,6 +280,7 @@ pub const Editor = struct {
         while (it.next()) |list| list.deinit(self.allocator);
         self.buffer_cursor_sets.deinit();
         for (self.buffers.items) |*b| b.deinit();
+        self.cursor_pool.deinit(self.allocator);
         self.windows.deinit(self.allocator);
         self.buffers.deinit(self.allocator);
         self.cursor_sets.deinit(self.allocator);
@@ -289,7 +294,8 @@ pub const Editor = struct {
 
     pub fn createCursorSet(self: *Editor, buffer_id: BufferId) !CursorSetId {
         const index: u24 = @intCast(self.cursor_sets.items.len);
-        try self.cursor_sets.append(self.allocator, CursorSet.init(buffer_id));
+        const cs_start = try self.cursor_pool.allocSlots(self.allocator, MAX_CURSORS);
+        try self.cursor_sets.append(self.allocator, CursorSet.init(buffer_id, cs_start));
         const id = CursorSetId{ .index = index, .generation = 0 };
         const key: u32 = @bitCast(buffer_id);
         const gop = try self.buffer_cursor_sets.getOrPut(key);
@@ -331,7 +337,7 @@ pub const Editor = struct {
         const key: u32 = @bitCast(buffer_id);
         if (self.buffer_cursor_sets.get(key)) |ids| {
             for (ids.items) |cs_id| {
-                if (self.getCursorSet(cs_id)) |cs| cs.adjustForInsert(pos, text.len);
+                if (self.getCursorSet(cs_id)) |cs| cs.adjustForInsert(&self.cursor_pool, pos, text.len);
             }
         }
         if (@as(u32, @bitCast(buffer_id)) != @as(u32, @bitCast(self.palette.buffer_id))) {
@@ -351,7 +357,7 @@ pub const Editor = struct {
         const key: u32 = @bitCast(buffer_id);
         if (self.buffer_cursor_sets.get(key)) |ids| {
             for (ids.items) |cs_id| {
-                if (self.getCursorSet(cs_id)) |cs| cs.adjustForDelete(pos, len);
+                if (self.getCursorSet(cs_id)) |cs| cs.adjustForDelete(&self.cursor_pool, pos, len);
             }
         }
         if (@as(u32, @bitCast(buffer_id)) != @as(u32, @bitCast(self.palette.buffer_id)))
@@ -365,26 +371,28 @@ pub const Editor = struct {
         const cs = self.getCursorSet(win.cursor_set_id) orelse return;
 
         self.palette.intent = intent;
-        self.palette.saved_cursors = cs.*;
+        const snap_start = self.cursor_pool.snapshotRange(self.allocator, cs.start, cs.len) catch cs.start;
+        self.palette.saved_cursors = .{ .buffer_id = cs.buffer_id, .start = snap_start, .len = cs.len };
 
         const pal_buf = self.getBuffer(self.palette.buffer_id) orelse return;
         if (pal_buf.len() > 0) self.bufferDelete(self.palette.buffer_id, 0, pal_buf.len());
 
         const pal_cs = self.getCursorSet(self.palette.cursor_set_id) orelse return;
         pal_cs.clear();
-        try pal_cs.insert(Cursor.init(0));
+        try pal_cs.insert(&self.cursor_pool, Cursor.init(0));
 
         self.palette.matches.clearRetainingCapacity();
         win.mode = .command;
 
         // Pre-populate with selection text if there's a single selection.
-        if (cs.len == 1 and cs.items[0].isSelection()) {
+        const cs_items = cs.iter(&self.cursor_pool);
+        if (cs.len == 1 and cs_items[0].isSelection()) {
             const main_buf = self.getBuffer(win.buffer_id) orelse return;
-            const c = cs.items[0];
+            const c = cs_items[0];
             const selected = main_buf.bytes()[c.start()..c.end()];
             pal_buf.insert(0, selected) catch {};
-            pal_cs.items[0].head = selected.len;
-            pal_cs.items[0].anchor = selected.len;
+            pal_cs.iter(&self.cursor_pool)[0].head = selected.len;
+            pal_cs.iter(&self.cursor_pool)[0].anchor = selected.len;
             self.updateMatches() catch {};
         }
     }
@@ -392,17 +400,18 @@ pub const Editor = struct {
     fn openPaletteForSplit(self: *Editor, complement: bool) !void {
         const win = self.getWindow(self.focused_window) orelse return;
         const cs = self.getCursorSet(win.cursor_set_id) orelse return;
-        if (!cs.hasSelection()) return;
+        if (!cs.hasSelection(&self.cursor_pool)) return;
 
         self.palette.intent = if (complement) .split_complement else .split;
-        self.palette.saved_cursors = cs.*;
+        const snap_start = self.cursor_pool.snapshotRange(self.allocator, cs.start, cs.len) catch cs.start;
+        self.palette.saved_cursors = .{ .buffer_id = cs.buffer_id, .start = snap_start, .len = cs.len };
 
         const pal_buf = self.getBuffer(self.palette.buffer_id) orelse return;
         if (pal_buf.len() > 0) self.bufferDelete(self.palette.buffer_id, 0, pal_buf.len());
 
         const pal_cs = self.getCursorSet(self.palette.cursor_set_id) orelse return;
         pal_cs.clear();
-        try pal_cs.insert(Cursor.init(0));
+        try pal_cs.insert(&self.cursor_pool, Cursor.init(0));
 
         self.palette.matches.clearRetainingCapacity();
         win.mode = .command;
@@ -420,14 +429,14 @@ pub const Editor = struct {
         const saved = self.palette.saved_cursors;
         cs.clear();
 
-        for (saved.items[0..saved.len]) |cursor| {
+        for (self.cursor_pool.slice(saved.start, saved.len)) |cursor| {
             if (!cursor.isSelection()) continue;
             const sel_start = cursor.start();
             const sel_end   = cursor.end();
             var i: usize = sel_start;
             while (i + pattern.len <= sel_end) {
                 if (std.mem.eql(u8, content[i .. i + pattern.len], pattern)) {
-                    cs.insert(.{ .anchor = i, .head = i + pattern.len }) catch break;
+                    cs.insert(&self.cursor_pool, .{ .anchor = i, .head = i + pattern.len }) catch break;
                     i += pattern.len;
                 } else {
                     i += 1;
@@ -435,7 +444,7 @@ pub const Editor = struct {
             }
         }
 
-        if (cs.len == 0) cs.* = saved;
+        if (cs.len == 0) cs.restoreFrom(&self.cursor_pool, saved.start, saved.len);
     }
 
     fn applySplitComplement(self: *Editor) void {
@@ -450,7 +459,7 @@ pub const Editor = struct {
         const saved = self.palette.saved_cursors;
         cs.clear();
 
-        for (saved.items[0..saved.len]) |cursor| {
+        for (self.cursor_pool.slice(saved.start, saved.len)) |cursor| {
             if (!cursor.isSelection()) continue;
             const sel_start = cursor.start();
             const sel_end   = cursor.end();
@@ -459,7 +468,7 @@ pub const Editor = struct {
             while (i + pattern.len <= sel_end) {
                 if (std.mem.eql(u8, content[i .. i + pattern.len], pattern)) {
                     if (gap_start < i)
-                        cs.insert(.{ .anchor = gap_start, .head = i }) catch break;
+                        cs.insert(&self.cursor_pool, .{ .anchor = gap_start, .head = i }) catch break;
                     i += pattern.len;
                     gap_start = i;
                 } else {
@@ -467,26 +476,27 @@ pub const Editor = struct {
                 }
             }
             if (gap_start < sel_end)
-                cs.insert(.{ .anchor = gap_start, .head = sel_end }) catch {};
+                cs.insert(&self.cursor_pool, .{ .anchor = gap_start, .head = sel_end }) catch {};
         }
 
-        if (cs.len == 0) cs.* = saved;
+        if (cs.len == 0) cs.restoreFrom(&self.cursor_pool, saved.start, saved.len);
     }
 
     fn openPaletteForFilter(self: *Editor, keep: bool) !void {
         const win = self.getWindow(self.focused_window) orelse return;
         const cs = self.getCursorSet(win.cursor_set_id) orelse return;
-        if (!cs.hasSelection()) return;
+        if (!cs.hasSelection(&self.cursor_pool)) return;
 
         self.palette.intent = if (keep) .filter_keep else .filter_drop;
-        self.palette.saved_cursors = cs.*;
+        const snap_start = self.cursor_pool.snapshotRange(self.allocator, cs.start, cs.len) catch cs.start;
+        self.palette.saved_cursors = .{ .buffer_id = cs.buffer_id, .start = snap_start, .len = cs.len };
 
         const pal_buf = self.getBuffer(self.palette.buffer_id) orelse return;
         if (pal_buf.len() > 0) self.bufferDelete(self.palette.buffer_id, 0, pal_buf.len());
 
         const pal_cs = self.getCursorSet(self.palette.cursor_set_id) orelse return;
         pal_cs.clear();
-        try pal_cs.insert(Cursor.init(0));
+        try pal_cs.insert(&self.cursor_pool, Cursor.init(0));
 
         self.palette.matches.clearRetainingCapacity();
         win.mode = .command;
@@ -503,38 +513,42 @@ pub const Editor = struct {
         const saved = self.palette.saved_cursors;
         cs.clear();
 
-        for (saved.items[0..saved.len]) |cursor| {
+        for (self.cursor_pool.slice(saved.start, saved.len)) |cursor| {
             if (!cursor.isSelection()) continue;
             const sel_start = cursor.start();
             const sel_end   = cursor.end();
             const sel_text  = content[sel_start..sel_end];
             const matches = if (pattern.len == 0) false else std.mem.indexOf(u8, sel_text, pattern) != null;
             const include = if (keep) matches else !matches;
-            if (include) cs.insert(cursor) catch break;
+            if (include) cs.insert(&self.cursor_pool, cursor) catch break;
         }
 
-        if (cs.len == 0) cs.* = saved;
+        if (cs.len == 0) cs.restoreFrom(&self.cursor_pool, saved.start, saved.len);
     }
 
     fn closePalette(self: *Editor, confirm: bool) void {
         const win = self.getWindow(self.focused_window) orelse return;
         win.mode = .normal;
         const cs = self.getCursorSet(win.cursor_set_id) orelse return;
+        const saved = self.palette.saved_cursors;
 
         if (confirm) {
             switch (self.palette.intent) {
                 .search_forward, .search_backward => {
                     if (self.palette.matches.items.len > 0) {
-                        const saved_head = if (self.palette.saved_cursors.len > 0) self.palette.saved_cursors.items[0].head else 0;
+                        const saved_head = if (saved.len > 0)
+                            self.cursor_pool.slice(saved.start, saved.len)[0].head
+                        else
+                            0;
                         const m = if (self.palette.intent == .search_forward)
                             findNextMatchFrom(self.palette.matches.items, saved_head) orelse self.palette.matches.items[0]
                         else
                             findPrevMatchFrom(self.palette.matches.items, saved_head) orelse self.palette.matches.items[self.palette.matches.items.len - 1];
                         cs.clear();
-                        cs.insert(.{ .head = m.end, .anchor = m.start }) catch {};
+                        cs.insert(&self.cursor_pool, .{ .head = m.end, .anchor = m.start }) catch {};
                         // Keep matches alive for n/p/N/P navigation.
                     } else {
-                        cs.* = self.palette.saved_cursors;
+                        cs.restoreFrom(&self.cursor_pool, saved.start, saved.len);
                         self.palette.matches.clearRetainingCapacity();
                     }
                 },
@@ -560,7 +574,7 @@ pub const Editor = struct {
                 },
             }
         } else {
-            cs.* = self.palette.saved_cursors;
+            cs.restoreFrom(&self.cursor_pool, saved.start, saved.len);
             self.palette.matches.clearRetainingCapacity();
             self.palette.intent = .search_forward;
         }
@@ -604,7 +618,7 @@ pub const Editor = struct {
         const cs = self.getCursorSet(win.cursor_set_id) orelse return;
 
         const highlights: []const Match = if (win.mode == .command) self.palette.matches.items else &.{};
-        try win.buildDrawList(dl, buf, cs, highlights, cursor_visible, self.dark_mode);
+        try win.buildDrawList(dl, buf, cs, &self.cursor_pool, highlights, cursor_visible, self.dark_mode);
 
         if (win.mode == .command) try self.drawPalette(dl, win, self.dark_mode);
     }
@@ -617,7 +631,7 @@ pub const Editor = struct {
         const pal_h: f32 = line_height * 1.5;
         const pal_x: f32 = (win.width - pal_w) / 2;
         const pal_y: f32 = 24;
-        const baseline = pal_y + pal_h / 2 + font_size / 3; // should come from font metrics, but eyeballing for now
+        const baseline = pal_y + pal_h / 2 + font_size / 3;
         const text_x = pal_x + 14;
 
         const pal_bg = if (dark_mode) draw.Color.rgb(45, 45, 45) else draw.Color.rgb(220, 220, 220);
@@ -659,7 +673,7 @@ pub const Editor = struct {
         // Palette cursor.
         const pal_cs = self.getCursorSet(self.palette.cursor_set_id) orelse return;
         if (pal_cs.len > 0) {
-            const cur_head = pal_cs.items[0].head;
+            const cur_head = pal_cs.iter(&self.cursor_pool)[0].head;
             const cx = pat_x + platform.measureText(pattern[0..cur_head], font_size);
             const cur_y = pal_y + (pal_h - line_height) / 2;
             try dl.fillRect(
@@ -679,18 +693,19 @@ pub const Editor = struct {
         var idx = cs.len;
         while (idx > 0) {
             idx -= 1;
-            const pos = cs.items[idx].head;
+            const items = cs.iter(&self.cursor_pool);
+            const pos = items[idx].head;
             buf_obj.insert(pos, text) catch continue;
             self.undo_stack.recordInsert(self.allocator, pos, text.len);
-            cs.items[idx].head = pos + (idx + 1) * text.len;
-            cs.items[idx].anchor = cs.items[idx].head;
+            items[idx].head = pos + (idx + 1) * text.len;
+            items[idx].anchor = items[idx].head;
         }
     }
 
     const Dir = enum { left, right, up, down };
 
     fn deleteSelections(self: *Editor, win: *Window, cs: *CursorSet) void {
-        var it = cs.reverseIter();
+        var it = cs.reverseIter(&self.cursor_pool);
         while (it.next()) |cursor| {
             if (cursor.isSelection())
                 self.bufferDelete(win.buffer_id, cursor.start(), cursor.end() - cursor.start());
@@ -701,7 +716,7 @@ pub const Editor = struct {
         const buf = self.bufOf(win.buffer_id);
         const content = buf.bytes();
         win.preferred_col = null;
-        for (cs.items[0..cs.len]) |*c| {
+        for (cs.iter(&self.cursor_pool)) |*c| {
             c.head = if (dir == .left) cursorLeft(content, c.head) else cursorRight(content, c.head);
         }
     }
@@ -710,7 +725,7 @@ pub const Editor = struct {
         if (cs.len == 0) return;
         const buf = self.bufOf(win.buffer_id);
         const content = buf.bytes();
-        const c = cs.items[0];
+        const c = cs.iter(&self.cursor_pool)[0];
         if (c.isSelection()) {
             platform.writeClipboard(content[c.start()..c.end()]);
         } else {
@@ -725,11 +740,11 @@ pub const Editor = struct {
         if (cs.len == 0) return;
         const buf = self.bufOf(win.buffer_id);
         const content = buf.bytes();
-        const c = cs.items[0];
+        const c = cs.iter(&self.cursor_pool)[0];
         if (c.isSelection()) {
             platform.writeClipboard(content[c.start()..c.end()]);
             self.deleteSelections(win, cs);
-            cs.clearSelections();
+            cs.clearSelections(&self.cursor_pool);
         } else {
             const ls = grapheme.lineStart(content, c.head);
             const le = grapheme.findChars(content, c.head, "\n");
@@ -740,7 +755,7 @@ pub const Editor = struct {
     }
 
     fn paste(self: *Editor, win: *Window, cs: *CursorSet) void {
-        cs.clearSelections();
+        cs.clearSelections(&self.cursor_pool);
         const clip = platform.readClipboard();
         if (clip.len > 0) self.insertAtCursors(win, cs, clip);
     }
@@ -748,7 +763,7 @@ pub const Editor = struct {
     fn move(self: *Editor, win: *Window, cs: *CursorSet, dir: Dir) void {
         const buf = self.bufOf(win.buffer_id);
         const content = buf.bytes();
-        for (cs.items[0..cs.len]) |*c| {
+        for (cs.iter(&self.cursor_pool)) |*c| {
             switch (dir) {
                 .left, .right => {
                     c.head = if (dir == .left) cursorLeft(content, c.head) else cursorRight(content, c.head);
@@ -769,7 +784,7 @@ pub const Editor = struct {
         if (c1 == 0) return;
         const buf = self.bufOf(win.buffer_id);
         const content = buf.bytes();
-        for (cs.items[0..cs.len]) |*c| {
+        for (cs.iter(&self.cursor_pool)) |*c| {
             const result = if (forward)
                 sneakForward(content, c.head, c1, c2)
             else
@@ -784,7 +799,7 @@ pub const Editor = struct {
 
     fn applyUndo(self: *Editor, win: *Window, cs: *CursorSet) void {
         const buf = self.bufOf(win.buffer_id);
-        self.undo_stack.undo(buf, cs);
+        self.undo_stack.undo(buf, cs, &self.cursor_pool);
         win.preferred_col = null;
         self.palette.matches_stale = true;
     }
@@ -795,7 +810,7 @@ pub const Editor = struct {
         const cs = self.getCursorSet(win.cursor_set_id) orelse return;
         switch (win.mode) {
             .normal => {
-                self.undo_stack.begin(cs);
+                self.undo_stack.begin(self.allocator, cs, &self.cursor_pool);
                 defer if (win.mode != .insert) self.undo_stack.commit(self.allocator);
                 var keep_preferred_col = false;
                 defer if (!keep_preferred_col) { win.preferred_col = null; };
@@ -810,7 +825,7 @@ pub const Editor = struct {
                     const content = buf.bytes();
                     if (mods & MOD_SHIFT != 0) {
                         // delete char after cursor
-                        var it = cs.reverseIter();
+                        var it = cs.reverseIter(&self.cursor_pool);
                         while (it.next()) |cursor| {
                             const next = cursorRight(content, cursor.head);
                             if (next > cursor.head)
@@ -818,7 +833,7 @@ pub const Editor = struct {
                         }
                     } else {
                         // delete char before cursor
-                        var it = cs.reverseIter();
+                        var it = cs.reverseIter(&self.cursor_pool);
                         while (it.next()) |cursor| {
                             const prev = cursorLeft(content, cursor.head);
                             if (prev < cursor.head)
@@ -836,7 +851,7 @@ pub const Editor = struct {
                             .none => unreachable,
                             .ms => {
                                 const pair = surroundPair(@intCast(@intFromEnum(key)));
-                                var it = cs.reverseIter();
+                                var it = cs.reverseIter(&self.cursor_pool);
                                 while (it.next()) |c| {
                                     const s = c.start();
                                     const e = c.end();
@@ -846,7 +861,7 @@ pub const Editor = struct {
                             },
                             .md => {
                                 const ch: u8 = @intCast(@intFromEnum(key));
-                                var it = cs.reverseIter();
+                                var it = cs.reverseIter(&self.cursor_pool);
                                 while (it.next()) |c| {
                                     if (surroundBounds(content, c.head, ch)) |b| {
                                         self.bufferDelete(win.buffer_id, b.end, 1);
@@ -862,7 +877,7 @@ pub const Editor = struct {
                             .mr2 => |char1| {
                                 const char2: u8 = @intCast(@intFromEnum(key));
                                 const pair2 = surroundPair(char2);
-                                var it = cs.reverseIter();
+                                var it = cs.reverseIter(&self.cursor_pool);
                                 while (it.next()) |c| {
                                     if (surroundBounds(content, c.head, char1)) |b| {
                                         self.bufferDelete(win.buffer_id, b.end, 1);
@@ -874,7 +889,7 @@ pub const Editor = struct {
                             },
                             .rl => {
                                 const ch: u8 = @intCast(@intFromEnum(key));
-                                var it = cs.reverseIter();
+                                var it = cs.reverseIter(&self.cursor_pool);
                                 while (it.next()) |c| {
                                     const prev = cursorLeft(content, c.head);
                                     if (prev < c.head) {
@@ -885,7 +900,7 @@ pub const Editor = struct {
                             },
                             .rr => {
                                 const ch: u8 = @intCast(@intFromEnum(key));
-                                var it = cs.reverseIter();
+                                var it = cs.reverseIter(&self.cursor_pool);
                                 while (it.next()) |c| {
                                     const next = cursorRight(content, c.head);
                                     if (next > c.head) {
@@ -907,20 +922,20 @@ pub const Editor = struct {
                             .prefix => |pending| switch (pending) {
                             'g' => switch (@intFromEnum(key)) {
                                 'h' => {
-                                    for (cs.items[0..cs.len]) |*c| {
+                                    for (cs.iter(&self.cursor_pool)) |*c| {
                                         c.head = grapheme.lineStart(content, c.head);
                                         c.anchor = c.head;
                                     }
                                 },
                                 'l' => {
-                                    for (cs.items[0..cs.len]) |*c| {
+                                    for (cs.iter(&self.cursor_pool)) |*c| {
                                         c.head = grapheme.findChars(content, c.head, "\n");
                                         c.anchor = c.head;
                                     }
                                 },
                                 'k' => {
                                     const first_line_end = grapheme.findChars(content, 0, "\n");
-                                    for (cs.items[0..cs.len]) |*c| {
+                                    for (cs.iter(&self.cursor_pool)) |*c| {
                                         const ls = grapheme.lineStart(content, c.head);
                                         const col_px = win.preferred_col orelse platform.measureText(content[ls..c.head], win.font_size);
                                         win.preferred_col = col_px;
@@ -934,7 +949,7 @@ pub const Editor = struct {
                                     for (content, 0..) |ch, i| {
                                         if (ch == '\n') last_ls = i + 1;
                                     }
-                                    for (cs.items[0..cs.len]) |*c| {
+                                    for (cs.iter(&self.cursor_pool)) |*c| {
                                         const ls = grapheme.lineStart(content, c.head);
                                         const col_px = win.preferred_col orelse platform.measureText(content[ls..c.head], win.font_size);
                                         win.preferred_col = col_px;
@@ -947,7 +962,7 @@ pub const Editor = struct {
                             },
                             'a' => switch (@intFromEnum(key)) {
                                 'w' => {
-                                    for (cs.items[0..cs.len]) |*c| {
+                                    for (cs.iter(&self.cursor_pool)) |*c| {
                                         if (wordBoundsAt(content, c.head)) |wb| {
                                             c.anchor = wb.start;
                                             c.head = wb.end;
@@ -955,7 +970,7 @@ pub const Editor = struct {
                                     }
                                 },
                                 '\'' => {
-                                    for (cs.items[0..cs.len]) |*c| {
+                                    for (cs.iter(&self.cursor_pool)) |*c| {
                                         if (quoteBounds(content, c.head, '\'')) |qb| {
                                             c.anchor = qb.start + 1;
                                             c.head = qb.end;
@@ -963,7 +978,7 @@ pub const Editor = struct {
                                     }
                                 },
                                 '(', ')' => {
-                                    for (cs.items[0..cs.len]) |*c| {
+                                    for (cs.iter(&self.cursor_pool)) |*c| {
                                         if (parenBounds(content, c.head, '(', ')')) |pb| {
                                             c.anchor = pb.start + 1;
                                             c.head = pb.end;
@@ -971,7 +986,7 @@ pub const Editor = struct {
                                     }
                                 },
                                 'p' => {
-                                    for (cs.items[0..cs.len]) |*c| {
+                                    for (cs.iter(&self.cursor_pool)) |*c| {
                                         // seek backward past non-blank lines to paragraph start
                                         var s = grapheme.lineStart(content, c.head);
                                         while (s > 0) {
@@ -993,8 +1008,9 @@ pub const Editor = struct {
                                 },
                                 'e' => {
                                     if (cs.len > 0) {
-                                        cs.items[0].anchor = 0;
-                                        cs.items[0].head = content.len;
+                                        const items = cs.iter(&self.cursor_pool);
+                                        items[0].anchor = 0;
+                                        items[0].head = content.len;
                                         cs.len = 1;
                                     }
                                 },
@@ -1002,7 +1018,7 @@ pub const Editor = struct {
                             },
                             'A' => switch (@intFromEnum(key)) {
                                 '\'' => {
-                                    for (cs.items[0..cs.len]) |*c| {
+                                    for (cs.iter(&self.cursor_pool)) |*c| {
                                         if (quoteBounds(content, c.head, '\'')) |qb| {
                                             c.anchor = qb.start;
                                             c.head = qb.end + 1;
@@ -1016,19 +1032,19 @@ pub const Editor = struct {
                                     if (cs.len > 1) cs.len = 1;
                                 },
                                 'v' => {
-                                    for (cs.items[0..cs.len]) |*c| {
+                                    for (cs.iter(&self.cursor_pool)) |*c| {
                                         c.anchor = c.head;
                                     }
                                 },
                                 'c' => {
-                                    for (cs.items[0..cs.len]) |*c| {
+                                    for (cs.iter(&self.cursor_pool)) |*c| {
                                         const tmp = c.head;
                                         c.head = c.anchor;
                                         c.anchor = tmp;
                                     }
                                 },
                                 'C' => {
-                                    for (cs.items[0..cs.len]) |*c| {
+                                    for (cs.iter(&self.cursor_pool)) |*c| {
                                         if (c.head > c.anchor) {
                                             const tmp = c.head;
                                             c.head = c.anchor;
@@ -1038,25 +1054,26 @@ pub const Editor = struct {
                                 },
                                 'j' => {
                                     if (cs.len == 0) return;
-                                    const last = cs.items[cs.len - 1];
+                                    const items = cs.iter(&self.cursor_pool);
+                                    const last = items[cs.len - 1];
                                     const ls = grapheme.lineStart(content, last.head);
                                     const col_px = win.preferred_col orelse platform.measureText(content[ls..last.head], win.font_size);
                                     win.preferred_col = col_px;
                                     const new_head = cursorDown(content, last.head, col_px, win.font_size);
                                     if (new_head != last.head) {
-                                        cs.insert(.{ .head = new_head, .anchor = new_head }) catch {};
+                                        cs.insert(&self.cursor_pool, .{ .head = new_head, .anchor = new_head }) catch {};
                                     }
                                     keep_preferred_col = true;
                                 },
                                 'k' => {
                                     if (cs.len == 0) return;
-                                    const first = cs.items[0];
+                                    const first = cs.iter(&self.cursor_pool)[0];
                                     const ls = grapheme.lineStart(content, first.head);
                                     const col_px = win.preferred_col orelse platform.measureText(content[ls..first.head], win.font_size);
                                     win.preferred_col = col_px;
                                     const new_head = cursorUp(content, first.head, col_px, win.font_size);
                                     if (new_head != first.head) {
-                                        cs.insert(.{ .head = new_head, .anchor = new_head }) catch {};
+                                        cs.insert(&self.cursor_pool, .{ .head = new_head, .anchor = new_head }) catch {};
                                     }
                                     keep_preferred_col = true;
                                 },
@@ -1064,19 +1081,21 @@ pub const Editor = struct {
                             },
                             '"' => switch (@intFromEnum(key)) {
                                 'j' => {
-                                    const ls = grapheme.lineStart(content, cs.items[0].head);
-                                    const col_px = win.preferred_col orelse platform.measureText(content[ls..cs.items[0].head], win.font_size);
+                                    const items = cs.iter(&self.cursor_pool);
+                                    const ls = grapheme.lineStart(content, items[0].head);
+                                    const col_px = win.preferred_col orelse platform.measureText(content[ls..items[0].head], win.font_size);
                                     win.preferred_col = col_px;
-                                    for (cs.items[0..cs.len]) |*c| {
+                                    for (items) |*c| {
                                         c.head = cursorDown(content, c.head, col_px, win.font_size);
                                     }
                                     keep_preferred_col = true;
                                 },
                                 'k' => {
-                                    const ls = grapheme.lineStart(content, cs.items[0].head);
-                                    const col_px = win.preferred_col orelse platform.measureText(content[ls..cs.items[0].head], win.font_size);
+                                    const items = cs.iter(&self.cursor_pool);
+                                    const ls = grapheme.lineStart(content, items[0].head);
+                                    const col_px = win.preferred_col orelse platform.measureText(content[ls..items[0].head], win.font_size);
                                     win.preferred_col = col_px;
-                                    for (cs.items[0..cs.len]) |*c| {
+                                    for (items) |*c| {
                                         c.head = cursorUp(content, c.head, col_px, win.font_size);
                                     }
                                     keep_preferred_col = true;
@@ -1098,7 +1117,7 @@ pub const Editor = struct {
                     'x' => {
                         const buf = self.bufOf(win.buffer_id);
                         const content = buf.bytes();
-                        for (cs.items[0..cs.len]) |*c| {
+                        for (cs.iter(&self.cursor_pool)) |*c| {
                             if (grapheme.lineStart(content, c.head) == grapheme.lineStart(content, c.anchor)) {
                                 c.anchor = grapheme.lineStart(content, c.head);
                             }
@@ -1109,7 +1128,7 @@ pub const Editor = struct {
                     'X' => {
                         const buf = self.bufOf(win.buffer_id);
                         const content = buf.bytes();
-                        for (cs.items[0..cs.len]) |*c| {
+                        for (cs.iter(&self.cursor_pool)) |*c| {
                             if (grapheme.lineStart(content, c.head) == grapheme.lineStart(content, c.anchor)) {
                                 c.anchor = grapheme.findChars(content, c.head, "\n");
                             }
@@ -1118,20 +1137,20 @@ pub const Editor = struct {
                         }
                     },
                     'h' => {
-                        if (cs.hasSelection()) {
-                            cs.collapseToStart();
+                        if (cs.hasSelection(&self.cursor_pool)) {
+                            cs.collapseToStart(&self.cursor_pool);
                         } else self.move(win, cs, .left);
                     },
                     'l' => {
-                        if (cs.hasSelection()) {
-                            cs.collapseToEnd();
+                        if (cs.hasSelection(&self.cursor_pool)) {
+                            cs.collapseToEnd(&self.cursor_pool);
                         } else self.move(win, cs, .right);
                     },
                     'k' => {
                         if (mods & MOD_ALT != 0) {
                             // Move line up
                             const buf = self.bufOf(win.buffer_id);
-                            for (cs.items[0..cs.len]) |*c| {
+                            for (cs.iter(&self.cursor_pool)) |*c| {
                                 const content = buf.bytes();
                                 const ls = grapheme.lineStart(content, c.head);
                                 if (ls == 0) continue;
@@ -1154,7 +1173,7 @@ pub const Editor = struct {
                                 c.anchor = c.head;
                             }
                         } else {
-                            cs.clearSelections();
+                            cs.clearSelections(&self.cursor_pool);
                             self.move(win, cs, .up);
                             keep_preferred_col = true;
                         }
@@ -1163,7 +1182,7 @@ pub const Editor = struct {
                         if (mods & MOD_ALT != 0) {
                             // Move line down
                             const buf = self.bufOf(win.buffer_id);
-                            var it = cs.reverseIter();
+                            var it = cs.reverseIter(&self.cursor_pool);
                             while (it.next()) |c| {
                                 const content = buf.bytes();
                                 const ls = grapheme.lineStart(content, c.head);
@@ -1187,7 +1206,7 @@ pub const Editor = struct {
                                 c.anchor = c.head;
                             }
                         } else {
-                            cs.clearSelections();
+                            cs.clearSelections(&self.cursor_pool);
                             self.move(win, cs, .down);
                             keep_preferred_col = true;
                         }
@@ -1195,7 +1214,7 @@ pub const Editor = struct {
                     'w' => {
                         const buf = self.bufOf(win.buffer_id);
                         const content = buf.bytes();
-                        for (cs.items[0..cs.len]) |*c| {
+                        for (cs.iter(&self.cursor_pool)) |*c| {
                             c.head = wordNext(content, c.head);
                             c.anchor = c.head;
                         }
@@ -1203,14 +1222,14 @@ pub const Editor = struct {
                     'W' => {
                         const buf = self.bufOf(win.buffer_id);
                         const content = buf.bytes();
-                        for (cs.items[0..cs.len]) |*c| {
+                        for (cs.iter(&self.cursor_pool)) |*c| {
                             c.head = wordNext(content, c.head);
                         }
                     },
                     'b' => {
                         const buf = self.bufOf(win.buffer_id);
                         const content = buf.bytes();
-                        for (cs.items[0..cs.len]) |*c| {
+                        for (cs.iter(&self.cursor_pool)) |*c| {
                             c.head = wordPrev(content, c.head);
                             c.anchor = c.head;
                         }
@@ -1218,18 +1237,18 @@ pub const Editor = struct {
                     'B' => {
                         const buf = self.bufOf(win.buffer_id);
                         const content = buf.bytes();
-                        for (cs.items[0..cs.len]) |*c| {
+                        for (cs.iter(&self.cursor_pool)) |*c| {
                             c.head = wordPrev(content, c.head);
                         }
                     },
                     'i' => {
-                        if (cs.hasSelection()) self.deleteSelections(win, cs);
+                        if (cs.hasSelection(&self.cursor_pool)) self.deleteSelections(win, cs);
                         win.mode = .insert;
                     },
                     'I' => {
                         const buf = self.bufOf(win.buffer_id);
                         const content = buf.bytes();
-                        for (cs.items[0..cs.len]) |*c| {
+                        for (cs.iter(&self.cursor_pool)) |*c| {
                             c.head = grapheme.lineStart(content, c.head);
                             c.anchor = c.head;
                         }
@@ -1244,28 +1263,28 @@ pub const Editor = struct {
                     'n' => {
                         self.requireFreshMatches();
                         if (self.palette.matches.items.len == 0 or cs.len == 0) return;
-                        const m = findNextMatchFrom(self.palette.matches.items, cs.items[cs.len - 1].end()) orelse return;
+                        const m = findNextMatchFrom(self.palette.matches.items, cs.iter(&self.cursor_pool)[cs.len - 1].end()) orelse return;
                         cs.clear();
-                        cs.insert(.{ .head = m.end, .anchor = m.start }) catch {};
+                        cs.insert(&self.cursor_pool, .{ .head = m.end, .anchor = m.start }) catch {};
                     },
                     'N' => {
                         self.requireFreshMatches();
                         if (self.palette.matches.items.len == 0 or cs.len == 0) return;
-                        const m = findNextMatchFrom(self.palette.matches.items, cs.items[cs.len - 1].end()) orelse return;
-                        cs.insert(.{ .head = m.end, .anchor = m.start }) catch {};
+                        const m = findNextMatchFrom(self.palette.matches.items, cs.iter(&self.cursor_pool)[cs.len - 1].end()) orelse return;
+                        cs.insert(&self.cursor_pool, .{ .head = m.end, .anchor = m.start }) catch {};
                     },
                     'p' => {
                         self.requireFreshMatches();
                         if (self.palette.matches.items.len == 0 or cs.len == 0) return;
-                        const m = findPrevMatchFrom(self.palette.matches.items, cs.items[0].start()) orelse return;
+                        const m = findPrevMatchFrom(self.palette.matches.items, cs.iter(&self.cursor_pool)[0].start()) orelse return;
                         cs.clear();
-                        cs.insert(.{ .head = m.end, .anchor = m.start }) catch {};
+                        cs.insert(&self.cursor_pool, .{ .head = m.end, .anchor = m.start }) catch {};
                     },
                     'P' => {
                         self.requireFreshMatches();
                         if (self.palette.matches.items.len == 0 or cs.len == 0) return;
-                        const m = findPrevMatchFrom(self.palette.matches.items, cs.items[0].start()) orelse return;
-                        cs.insert(.{ .head = m.end, .anchor = m.start }) catch {};
+                        const m = findPrevMatchFrom(self.palette.matches.items, cs.iter(&self.cursor_pool)[0].start()) orelse return;
+                        cs.insert(&self.cursor_pool, .{ .head = m.end, .anchor = m.start }) catch {};
                     },
                     '*' => {
                         if (cs.len == 0) return;
@@ -1273,7 +1292,7 @@ pub const Editor = struct {
                         const buf = self.bufOf(win.buffer_id);
                         const content = buf.bytes();
                         if (self.palette.matches.items.len == 0) {
-                            const c0 = cs.items[0];
+                            const c0 = cs.iter(&self.cursor_pool)[0];
                             const term: ?[]const u8 = if (c0.isSelection())
                                 content[c0.start()..c0.end()]
                             else if (wordBoundsAt(content, c0.head)) |wb|
@@ -1286,8 +1305,8 @@ pub const Editor = struct {
                                 self.bufferInsert(self.palette.buffer_id, 0, word) catch return;
                                 const pal_cs = self.getCursorSet(self.palette.cursor_set_id) orelse return;
                                 if (pal_cs.len > 0) {
-                                    pal_cs.items[0].head = word.len;
-                                    pal_cs.items[0].anchor = word.len;
+                                    pal_cs.iter(&self.cursor_pool)[0].head = word.len;
+                                    pal_cs.iter(&self.cursor_pool)[0].anchor = word.len;
                                 }
                                 self.updateMatches() catch return;
                             }
@@ -1295,14 +1314,14 @@ pub const Editor = struct {
                         if (self.palette.matches.items.len > 0) {
                             cs.clear();
                             for (self.palette.matches.items) |m| {
-                                cs.insert(.{ .head = m.end, .anchor = m.start }) catch break;
+                                cs.insert(&self.cursor_pool, .{ .head = m.end, .anchor = m.start }) catch break;
                             }
                         }
                     },
                     'o' => {
                         if (cs.len == 0) return;
                         const buf = self.bufOf(win.buffer_id);
-                        var it = cs.reverseIter();
+                        var it = cs.reverseIter(&self.cursor_pool);
                         while (it.next()) |c| {
                             const line_end = grapheme.findChars(buf.bytes(), c.head, "\n");
                             self.bufferInsert(win.buffer_id, line_end, "\n") catch continue;
@@ -1314,7 +1333,7 @@ pub const Editor = struct {
                     'O' => {
                         if (cs.len == 0) return;
                         const buf = self.bufOf(win.buffer_id);
-                        var it = cs.reverseIter();
+                        var it = cs.reverseIter(&self.cursor_pool);
                         while (it.next()) |c| {
                             const line_start = grapheme.lineStart(buf.bytes(), c.head);
                             self.bufferInsert(win.buffer_id, line_start, "\n") catch continue;
@@ -1330,8 +1349,8 @@ pub const Editor = struct {
                         // Collect line ranges from current content, then merge overlapping.
                         const content = buf.bytes();
                         const Range = struct { start: usize, end: usize };
-                        var ranges: [512]Range = undefined;
-                        for (cs.items[0..cs.len], 0..) |c, i| {
+                        var ranges: [MAX_CURSORS]Range = undefined;
+                        for (cs.iter(&self.cursor_pool), 0..) |c, i| {
                             const ls = grapheme.lineStart(content, c.start());
                             const le = grapheme.findChars(content, c.end(), "\n");
                             ranges[i] = .{
@@ -1340,7 +1359,7 @@ pub const Editor = struct {
                             };
                         }
                         // Merge (cursors are sorted so ranges are in order).
-                        var merged: [512]Range = undefined;
+                        var merged: [MAX_CURSORS]Range = undefined;
                         var n: usize = 0;
                         for (ranges[0..cs.len]) |r| {
                             if (n > 0 and r.start <= merged[n - 1].end) {
@@ -1362,7 +1381,7 @@ pub const Editor = struct {
                     '\'' => {
                         const buf = self.bufOf(win.buffer_id);
                         const content = buf.bytes();
-                        for (cs.items[0..cs.len]) |*c| {
+                        for (cs.iter(&self.cursor_pool)) |*c| {
                             c.head = grapheme.findChars(content, c.head, "\n");
                             c.anchor = c.head;
                         }
@@ -1378,7 +1397,7 @@ pub const Editor = struct {
                     't' => {
                         const buf = self.bufOf(win.buffer_id);
                         const content = buf.bytes();
-                        var it = cs.reverseIter();
+                        var it = cs.reverseIter(&self.cursor_pool);
                         while (it.next()) |c| {
                             const prev = cursorLeft(content, c.head);
                             const next = cursorRight(content, c.head);
@@ -1400,7 +1419,7 @@ pub const Editor = struct {
                     'T' => {
                         const buf = self.bufOf(win.buffer_id);
                         const content = buf.bytes();
-                        var it = cs.reverseIter();
+                        var it = cs.reverseIter(&self.cursor_pool);
                         while (it.next()) |c| {
                             // Find left word end, then start
                             if (c.head == 0 or (isWordChar(content[c.head]) and isWordChar(content[c.head-1]))) continue;
@@ -1451,7 +1470,7 @@ pub const Editor = struct {
                 .arrow_down => self.move(win, cs, .down),
                 .backspace => {
                     win.preferred_col = null;
-                    var it = cs.reverseIter();
+                    var it = cs.reverseIter(&self.cursor_pool);
                     while (it.next()) |cursor| {
                         if (cursor.head > 0)
                             self.bufferDelete(win.buffer_id, cursor.head - 1, 1);
@@ -1465,7 +1484,7 @@ pub const Editor = struct {
                     win.preferred_col = null;
                     const buf = self.bufOf(win.buffer_id);
                     const content = buf.bytes();
-                    var it = cs.reverseIter();
+                    var it = cs.reverseIter(&self.cursor_pool);
                     while (it.next()) |cursor| {
                         const prev = wordPrev(content, cursor.head);
                         if (prev < cursor.head)
@@ -1485,22 +1504,22 @@ pub const Editor = struct {
                     .escape => self.closePalette(false),
                     .enter => self.closePalette(true),
                     .backspace => {
-                        if (pal_cs.len > 0 and pal_cs.items[0].head > 0) {
-                            self.bufferDelete(self.palette.buffer_id, pal_cs.items[0].head - 1, 1);
+                        if (pal_cs.len > 0 and pal_cs.iter(&self.cursor_pool)[0].head > 0) {
+                            self.bufferDelete(self.palette.buffer_id, pal_cs.iter(&self.cursor_pool)[0].head - 1, 1);
                             self.updateMatches() catch {};
                         }
                     },
                     .arrow_left => {
-                        if (pal_cs.len > 0 and pal_cs.items[0].head > 0) {
-                            pal_cs.items[0].head -= 1;
-                            pal_cs.items[0].anchor = pal_cs.items[0].head;
+                        if (pal_cs.len > 0 and pal_cs.iter(&self.cursor_pool)[0].head > 0) {
+                            pal_cs.iter(&self.cursor_pool)[0].head -= 1;
+                            pal_cs.iter(&self.cursor_pool)[0].anchor = pal_cs.iter(&self.cursor_pool)[0].head;
                         }
                     },
                     .arrow_right => {
                         const pal_buf = self.getBuffer(self.palette.buffer_id) orelse return;
-                        if (pal_cs.len > 0 and pal_cs.items[0].head < pal_buf.len()) {
-                            pal_cs.items[0].head += 1;
-                            pal_cs.items[0].anchor = pal_cs.items[0].head;
+                        if (pal_cs.len > 0 and pal_cs.iter(&self.cursor_pool)[0].head < pal_buf.len()) {
+                            pal_cs.iter(&self.cursor_pool)[0].head += 1;
+                            pal_cs.iter(&self.cursor_pool)[0].anchor = pal_cs.iter(&self.cursor_pool)[0].head;
                         }
                     },
                     else => if (key.isPrintable()) {
@@ -1508,7 +1527,7 @@ pub const Editor = struct {
                         const cp: u21 = @intCast(@intFromEnum(key));
                         const byte_len = std.unicode.utf8Encode(cp, &encoded) catch return;
                         if (pal_cs.len > 0) {
-                            self.bufferInsert(self.palette.buffer_id, pal_cs.items[0].head, encoded[0..byte_len]) catch return;
+                            self.bufferInsert(self.palette.buffer_id, pal_cs.iter(&self.cursor_pool)[0].head, encoded[0..byte_len]) catch return;
                             self.updateMatches() catch {};
                         }
                     },
@@ -1535,14 +1554,14 @@ pub const Editor = struct {
                 win.preferred_col = null;
                 const alt = (mods & @import("key.zig").MOD_ALT) != 0;
                 if (!alt) cs.clear();
-                cs.insert(Cursor.init(pos)) catch {};
+                cs.insert(&self.cursor_pool, Cursor.init(pos)) catch {};
                 if (!alt) self.drag_anchor = pos;
             },
             0 => { // mousemove
                 const anchor = self.drag_anchor orelse return;
                 const pos = posFromPoint(win, buf.bytes(), x, y);
                 cs.clear();
-                cs.insert(.{
+                cs.insert(&self.cursor_pool, .{
                     .head = pos,
                     .anchor = anchor,
                 }) catch {};
