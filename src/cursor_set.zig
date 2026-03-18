@@ -32,10 +32,9 @@ pub const CursorPool = struct {
     /// Copy `src_start..src_start+len` into a *new* pool region (safe even
     /// when src lives inside this pool — copies to a temp buffer first).
     pub fn snapshotRange(self: *CursorPool, allocator: std.mem.Allocator, src_start: CursorPoolIdx, len: u32) !CursorPoolIdx {
-        var tmp: [MAX_CURSORS]Cursor = undefined;
-        @memcpy(tmp[0..len], self.slab.items[@intFromEnum(src_start)..][0..len]);
+        try self.slab.ensureUnusedCapacity(allocator, len);
         const start: CursorPoolIdx = @enumFromInt(self.slab.items.len);
-        try self.slab.appendSlice(allocator, tmp[0..len]);
+        self.slab.appendSliceAssumeCapacity(self.slab.items[@intFromEnum(src_start)..][0..len]);
         return start;
     }
 
