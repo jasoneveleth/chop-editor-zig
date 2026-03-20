@@ -1502,6 +1502,8 @@ pub const Editor = struct {
                             c.anchor = c.head;
                         }
                     },
+                    ';' => { for (cs.iter(&self.cursor_pool)) |*c| { c.anchor = c.head; } }, // cv: collapse selections
+                    ':' => { if (cs.len > 1) cs.len = 1; }, // cd: drop to single cursor
                     'g', 'c', 'a', 'A', '"' => { win.pending = .{ .prefix = @intCast(@intFromEnum(key)) }; },
                     'm' => { win.pending = .{ .prefix = 'm' }; },
                     else => {},
