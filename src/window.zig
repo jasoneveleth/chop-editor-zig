@@ -47,6 +47,7 @@ pub const Window = struct {
     sneak_c1: u8 = 0,
     sneak_c2: u8 = 0,
     sneak_forward: bool = true,
+    last_cmd: u8 = 0,
 
     pub fn init(buffer_id: BufferId, cursor_set_id: CursorSetId, width: u32, height: u32) Window {
         return .{

@@ -938,6 +938,7 @@ pub const Editor = struct {
                                 win.sneak_c1 = state.c1;
                                 win.sneak_c2 = c2;
                                 win.sneak_forward = state.forward;
+                                win.last_cmd = if (state.forward) 'f' else 'F';
                                 self.execSneak(win, cs, state.c1, c2, state.forward);
                             },
                             .prefix => |pending| switch (pending) {
@@ -1120,7 +1121,10 @@ pub const Editor = struct {
                             },
                         },
                     }
-                    } else switch (@intFromEnum(key)) {
+                    } else {
+                    const prev_cmd = win.last_cmd;
+                    win.last_cmd = @intCast(@intFromEnum(key));
+                    switch (@intFromEnum(key)) {
                     'H' => self.extendSelection(win, cs, .left),
                     'L' => self.extendSelection(win, cs, .right),
                     '[' => {
@@ -1432,10 +1436,14 @@ pub const Editor = struct {
                            else self.applyRedo(win, cs),
                     'r' => { win.pending = .rl; },
                     'R' => { win.pending = .rr; },
-                    'f' => { win.pending = .{ .sf1 = true }; },
-                    'F' => { win.pending = .{ .sf1 = false }; },
-                    ';' => self.execSneak(win, cs, win.sneak_c1, win.sneak_c2, win.sneak_forward),
-                    ':' => self.execSneak(win, cs, win.sneak_c1, win.sneak_c2, !win.sneak_forward),
+                    'f' => if (prev_cmd == 'f' or prev_cmd == 'F')
+                        self.execSneak(win, cs, win.sneak_c1, win.sneak_c2, win.sneak_forward)
+                    else
+                        { win.pending = .{ .sf1 = true }; },
+                    'F' => if (prev_cmd == 'f' or prev_cmd == 'F')
+                        self.execSneak(win, cs, win.sneak_c1, win.sneak_c2, !win.sneak_forward)
+                    else
+                        { win.pending = .{ .sf1 = false }; },
                     't' => {
                         const buf = self.bufOf(win.buffer_id);
                         const content = buf.bytes();
@@ -1498,6 +1506,7 @@ pub const Editor = struct {
                     'm' => { win.pending = .{ .prefix = 'm' }; },
                     else => {},
                     } // end single-key switch
+                    } // end sneak-save else block
                 }, // end pending_key else / isPrintable block
                 } // end switch(key)
             },
