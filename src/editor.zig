@@ -1038,6 +1038,9 @@ pub const Editor = struct {
                                     }
                                     keep_preferred_col = true;
                                 },
+                                'h' => {
+                                    platform.openUrl("https://jason.pub/chop-editor-zig/keyboard-guide.html");
+                                },
                                 else => {},
                             },
                             'a' => switch (@intFromEnum(key)) {

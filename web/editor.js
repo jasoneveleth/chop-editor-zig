@@ -113,6 +113,11 @@ const imports = {
       new Uint8Array(memory.buffer, outPtr, n).set(bytes.subarray(0, n));
       return n;
     },
+
+    js_open_url(ptr, len) {
+      const url = wasmStr(ptr, len);
+      window.open(url, '_blank');
+    },
   },
 };
 

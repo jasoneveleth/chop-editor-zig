@@ -29,6 +29,7 @@ mkdir -p dist
 cp web/index.html dist/
 cp web/editor.js dist/
 cp web/editor.wasm dist/
+cp web/keyboard-guide.html dist/
 
 # 3. Deploy to gh-pages via a detached worktree push
 echo "→ Deploying to gh-pages..."
