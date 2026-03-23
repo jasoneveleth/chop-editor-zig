@@ -790,6 +790,22 @@ pub const Editor = struct {
         }
     }
 
+    fn delete(self: *Editor, win: *Window, cs: *CursorSet) void {
+        if (cs.len == 0) return;
+        const buf = self.bufOf(win.buffer_id);
+        const content = buf.bytes();
+        const c = cs.iter(&self.cursor_pool)[0];
+        if (c.isSelection()) {
+            self.deleteSelections(win, cs);
+            cs.clearSelections(&self.cursor_pool);
+        } else {
+            const ls = grapheme.lineStart(content, c.head);
+            const le = grapheme.findChars(content, c.head, "\n");
+            const line_end = if (le < content.len) le + 1 else content.len;
+            self.bufferDelete(win.buffer_id, ls, line_end - ls);
+        }
+    }
+
     fn cut(self: *Editor, win: *Window, cs: *CursorSet) void {
         if (cs.len == 0) return;
         const buf = self.bufOf(win.buffer_id);
@@ -1091,7 +1107,7 @@ pub const Editor = struct {
                                 },
                                 else => {},
                             },
-                            'c' => switch (@intFromEnum(key)) {
+                            'C' => switch (@intFromEnum(key)) {
                                 'd' => {
                                     if (cs.len > 1) cs.len = 1;
                                 },
@@ -1115,31 +1131,6 @@ pub const Editor = struct {
                                             c.anchor = tmp;
                                         }
                                     }
-                                },
-                                'j' => {
-                                    if (cs.len == 0) return;
-                                    const items = cs.iter(&self.cursor_pool);
-                                    const last = items[cs.len - 1];
-                                    const ls = grapheme.lineStart(content, last.head);
-                                    const col_px = win.preferred_col orelse platform.measureText(content[ls..last.head], win.font_size);
-                                    win.preferred_col = col_px;
-                                    const new_head = cursorDown(content, last.head, col_px, win.font_size);
-                                    if (new_head != last.head) {
-                                        cs.insert(&self.cursor_pool, .{ .head = new_head, .anchor = new_head }) catch {};
-                                    }
-                                    keep_preferred_col = true;
-                                },
-                                'k' => {
-                                    if (cs.len == 0) return;
-                                    const first = cs.iter(&self.cursor_pool)[0];
-                                    const ls = grapheme.lineStart(content, first.head);
-                                    const col_px = win.preferred_col orelse platform.measureText(content[ls..first.head], win.font_size);
-                                    win.preferred_col = col_px;
-                                    const new_head = cursorUp(content, first.head, col_px, win.font_size);
-                                    if (new_head != first.head) {
-                                        cs.insert(&self.cursor_pool, .{ .head = new_head, .anchor = new_head }) catch {};
-                                    }
-                                    keep_preferred_col = true;
                                 },
                                 else => {},
                             },
@@ -1275,12 +1266,34 @@ pub const Editor = struct {
                             keep_preferred_col = true;
                         }
                     },
+                    'J' => {
+                        if (cs.len == 0) return;
+                        const buf = self.bufOf(win.buffer_id);
+                        const content = buf.bytes();
+                        const items = cs.iter(&self.cursor_pool);
+                        const last = items[cs.len - 1];
+                        const ls = grapheme.lineStart(content, last.head);
+                        const col_px = win.preferred_col orelse platform.measureText(content[ls..last.head], win.font_size);
+                        win.preferred_col = col_px;
+                        const new_head = cursorDown(content, last.head, col_px, win.font_size);
+                        if (new_head != last.head) {
+                            cs.insert(&self.cursor_pool, .{ .head = new_head, .anchor = new_head }) catch {};
+                        }
+                        keep_preferred_col = true;
+                    },
                     'K' => {
-                        const head = cs.iter(&self.cursor_pool)[0].head;
-                        const h = &self.highlighters.items[win.buffer_id.index];
-                        var path_buf: [512]u8 = undefined;
-                        const path = h.nodePathAtByte(@intCast(head), &path_buf);
-                        platform.log("byte={d}: {s}", .{ head, path });
+                        if (cs.len == 0) return;
+                        const buf = self.bufOf(win.buffer_id);
+                        const content = buf.bytes();
+                        const first = cs.iter(&self.cursor_pool)[0];
+                        const ls = grapheme.lineStart(content, first.head);
+                        const col_px = win.preferred_col orelse platform.measureText(content[ls..first.head], win.font_size);
+                        win.preferred_col = col_px;
+                        const new_head = cursorUp(content, first.head, col_px, win.font_size);
+                        if (new_head != first.head) {
+                            cs.insert(&self.cursor_pool, .{ .head = new_head, .anchor = new_head }) catch {};
+                        }
+                        keep_preferred_col = true;
                     },
                     'j' => {
                         if (mods & MOD_ALT != 0) {
@@ -1346,7 +1359,7 @@ pub const Editor = struct {
                         }
                     },
                     'i' => {
-                        if (cs.hasSelection(&self.cursor_pool)) self.deleteSelections(win, cs);
+                        for (cs.iter(&self.cursor_pool)) |*c| { c.anchor = c.head; }
                         win.mode = .insert;
                     },
                     'I' => {
@@ -1446,7 +1459,7 @@ pub const Editor = struct {
                         }
                         win.mode = .insert;
                     },
-                    'd' => self.cut(win, cs),
+                    'd' => self.delete(win, cs),
                     'D' => {
                         if (cs.len == 0) return;
                         const buf = self.bufOf(win.buffer_id);
@@ -1565,7 +1578,8 @@ pub const Editor = struct {
                     },
                     ';' => { for (cs.iter(&self.cursor_pool)) |*c| { c.anchor = c.head; } }, // cv: collapse selections
                     ':' => { if (cs.len > 1) cs.len = 1; }, // cd: drop to single cursor
-                    'g', 'c', 'a', 'A', '"' => { win.pending = .{ .prefix = @intCast(@intFromEnum(key)) }; },
+                    'g', 'C', 'a', 'A', '"' => { win.pending = .{ .prefix = @intCast(@intFromEnum(key)) }; },
+                    'c' => self.cut(win, cs),
                     'm' => { win.pending = .{ .prefix = 'm' }; },
                     else => {},
                     } // end single-key switch
