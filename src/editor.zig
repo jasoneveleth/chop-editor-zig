@@ -21,8 +21,49 @@ const platform = @import("platform/web.zig");
 const grapheme = @import("grapheme.zig");
 const undo_mod = @import("undo.zig");
 const UndoStack = undo_mod.UndoHistory;
+const Highlighter = @import("highlighter.zig").Highlighter;
 
-const FILLER_TEXT = "Out of the night that covers me,\n      Black as the pit from pole to pole,\nI thank whatever gods may be\n      For my unconquerable soul.\n\nIn the fell clutch of circumstance\n      I have not winced nor cried aloud.\nUnder the bludgeonings of chance\n      My head is bloody, but unbowed.\n\nBeyond this place of wrath and tears\n      Looms but the Horror of the shade,\nAnd yet the menace of the years\n      Finds and shall find me unafraid.\n\nIt matters not how strait the gate,\n      How charged with punishments the scroll,\nI am the master of my fate,\n      I am the captain of my soul.";
+const FILLER_TEXT =
+    \\pub const Cursor = struct {
+    \\    /// The active (moving) end of the selection.
+    \\    head: usize,
+    \\    /// The fixed end of the selection. Equal to head when there is no selection.
+    \\    anchor: usize,
+    \\
+    \\    pub fn init(pos: usize) Cursor {
+    \\        const pos1 = pos + 1;
+    \\        return .{ .head = pos, .anchor = pos1 };
+    \\    }
+    \\
+    \\    pub fn start(self: Cursor) usize {
+    \\        return @min(self.head, self.anchor);
+    \\    }
+    \\
+    \\    pub fn end(self: Cursor) usize {
+    \\        return @max(self.head, self.anchor);
+    \\    }
+    \\
+    \\    pub fn isSelection(self: Cursor) bool {
+    \\        return self.head != self.anchor;
+    \\    }
+    \\
+    \\    pub fn adjustForInsert(self: *Cursor, pos: usize, len: usize) void {
+    \\        if (self.head >= pos) self.head += len;
+    \\        if (self.anchor >= pos) self.anchor += len;
+    \\    }
+    \\
+    \\    pub fn adjustForDelete(self: *Cursor, pos: usize, len: usize) void {
+    \\        self.head = clampDelete(self.head, pos, len);
+    \\        self.anchor = clampDelete(self.anchor, pos, len);
+    \\    }
+    \\};
+    \\
+    \\fn clampDelete(v: usize, pos: usize, len: usize) usize {
+    \\    if (v <= pos) return v;
+    \\    if (v < pos + len) return pos;
+    \\    return v - len;
+    \\}
+;
 
 // ── Cursor movement helpers ────────────────────────────────────────────────
 
@@ -243,6 +284,7 @@ pub const Editor = struct {
     dark_mode: bool = true,
     drag_anchor: ?usize = null,
     undo_stack: UndoStack = .{},
+    highlighters: std.ArrayList(Highlighter),
 
     pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, dark_mode: bool) !Editor {
         var editor = Editor{
@@ -255,11 +297,13 @@ pub const Editor = struct {
             .focused_window = undefined,
             .palette = undefined,
             .dark_mode = dark_mode,
+            .highlighters = .{},
         };
 
         // Main buffer + cursor set + window.
         const buf_id = try editor.createBuffer();
         editor.getBuffer(buf_id).?.insert(0, FILLER_TEXT) catch {};
+        editor.highlighters.items[buf_id.index].rehighlight(FILLER_TEXT) catch {};
         const cs_id = try editor.createCursorSet(buf_id);
         try editor.getCursorSet(cs_id).?.insert(&editor.cursor_pool, Cursor.init(0));
         editor.focused_window = try editor.createWindow(buf_id, cs_id, width, height);
@@ -280,6 +324,8 @@ pub const Editor = struct {
         while (it.next()) |list| list.deinit(self.allocator);
         self.buffer_cursor_sets.deinit();
         for (self.buffers.items) |*b| b.deinit();
+        for (self.highlighters.items) |*h| h.deinit();
+        self.highlighters.deinit();
         self.cursor_pool.deinit(self.allocator);
         self.windows.deinit(self.allocator);
         self.buffers.deinit(self.allocator);
@@ -288,8 +334,11 @@ pub const Editor = struct {
 
     pub fn createBuffer(self: *Editor) !BufferId {
         const index: u24 = @intCast(self.buffers.items.len);
+        const id = BufferId{ .index = index, .generation = 0 };
         try self.buffers.append(self.allocator, Buffer.init(self.allocator));
-        return BufferId{ .index = index, .generation = 0 };
+        const h = try Highlighter.init(self.allocator, id);
+        try self.highlighters.append(self.allocator, h);
+        return id;
     }
 
     pub fn createCursorSet(self: *Editor, buffer_id: BufferId) !CursorSetId {
@@ -343,6 +392,7 @@ pub const Editor = struct {
         if (@as(u32, @bitCast(buffer_id)) != @as(u32, @bitCast(self.palette.buffer_id))) {
             self.palette.matches_stale = true;
             self.undo_stack.recordInsert(self.allocator, pos, text);
+            self.highlighters.items[buffer_id.index].rehighlight(buf.bytes()) catch {};
         }
     }
 
@@ -360,8 +410,11 @@ pub const Editor = struct {
                 if (self.getCursorSet(cs_id)) |cs| cs.adjustForDelete(&self.cursor_pool, pos, len);
             }
         }
-        if (@as(u32, @bitCast(buffer_id)) != @as(u32, @bitCast(self.palette.buffer_id)))
+        if (@as(u32, @bitCast(buffer_id)) != @as(u32, @bitCast(self.palette.buffer_id))) {
             self.palette.matches_stale = true;
+            const buf_after = self.getBuffer(buffer_id) orelse return;
+            self.highlighters.items[buffer_id.index].rehighlight(buf_after.bytes()) catch {};
+        }
     }
 
     // ── Search ────────────────────────────────────────────────────────────────
@@ -618,7 +671,8 @@ pub const Editor = struct {
         const cs = self.getCursorSet(win.cursor_set_id) orelse return;
 
         const highlights: []const Match = if (win.mode == .command) self.palette.matches.items else &.{};
-        try win.buildDrawList(dl, buf, cs, &self.cursor_pool, highlights, cursor_visible, self.dark_mode);
+        const spans = self.highlighters.items[win.buffer_id.index].spans.items;
+        try win.buildDrawList(dl, buf, cs, &self.cursor_pool, highlights, spans, cursor_visible, self.dark_mode);
 
         if (win.mode == .command) try self.drawPalette(dl, win, self.dark_mode);
     }
@@ -1220,6 +1274,13 @@ pub const Editor = struct {
                             self.move(win, cs, .up);
                             keep_preferred_col = true;
                         }
+                    },
+                    'K' => {
+                        const head = cs.iter(&self.cursor_pool)[0].head;
+                        const h = &self.highlighters.items[win.buffer_id.index];
+                        var path_buf: [512]u8 = undefined;
+                        const path = h.nodePathAtByte(@intCast(head), &path_buf);
+                        platform.log("byte={d}: {s}", .{ head, path });
                     },
                     'j' => {
                         if (mods & MOD_ALT != 0) {

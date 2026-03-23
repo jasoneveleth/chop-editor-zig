@@ -28,7 +28,39 @@ function wasmStr(ptr, len) {
 
 // ── JS imports (called from WASM via extern fn) ───────────────────────────────
 
+// WASI shims — the WASM module now targets wasm32-wasi (for libc/tree-sitter),
+// but we don't actually use any WASI syscalls at runtime. These stubs satisfy
+// the linker's import requirements.
+const wasi_snapshot_preview1 = {
+  fd_write:          () => 0,
+  fd_read:           () => 0,
+  fd_close:          () => 0,
+  fd_seek:           () => 0,
+  fd_fdstat_get:         () => 0,
+  fd_fdstat_set_flags:   () => 0,
+  fd_prestat_get:        () => 8,  // EBADF — no preopens
+  fd_prestat_dir_name: () => 0,
+  environ_get:       () => 0,
+  environ_sizes_get: (countPtr, bufPtr) => {
+    const view = new DataView(memory.buffer);
+    view.setUint32(countPtr, 0, true);
+    view.setUint32(bufPtr,   0, true);
+    return 0;
+  },
+  args_get:          () => 0,
+  args_sizes_get:    (countPtr, bufPtr) => {
+    const view = new DataView(memory.buffer);
+    view.setUint32(countPtr, 0, true);
+    view.setUint32(bufPtr,   0, true);
+    return 0;
+  },
+  proc_exit: (code) => { throw new Error("proc_exit(" + code + ")"); },
+  clock_time_get:    () => 0,
+  random_get: () => 0,
+};
+
 const imports = {
+  wasi_snapshot_preview1,
   env: {
     js_fill_rect(x, y, w, h, color) {
       ctx.fillStyle = unpackColor(color);

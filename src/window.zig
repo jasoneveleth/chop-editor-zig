@@ -6,8 +6,34 @@ const CursorSet = @import("cursor_set.zig").CursorSet;
 const CursorSetId = @import("cursor_set.zig").CursorSetId;
 const CursorPool = @import("cursor_set.zig").CursorPool;
 const Match = @import("palette.zig").Match;
+const highlight = @import("highlight.zig");
 // Hardcoded to web for now — measureText is needed during layout.
 const platform = @import("platform/web.zig");
+
+fn tagColor(tag: highlight.Tag, dark_mode: bool) draw.Color {
+    if (dark_mode) return switch (tag) {
+        .default => draw.Color.rgb(204, 204, 204),
+        .keyword => draw.Color.rgb(255, 255, 255),
+        .string  => draw.Color.rgb(206, 145, 120),
+        .comment => draw.Color.rgb(197, 134, 192),
+        .number  => draw.Color.rgb(181, 206, 168),
+        .builtin => draw.Color.rgb(220, 220, 170),
+        .punctuation => draw.Color.rgb(150, 150, 150),
+        .identifier => draw.Color.rgb(255, 255, 255),
+        .identifier_decl => draw.Color.rgb(120, 132, 206),
+    };
+    return switch (tag) {
+        .default => draw.Color.rgb( 27,  27,  27),
+        .keyword => draw.Color.rgb( 27,  27,  27),
+        .string  => draw.Color.rgb(163,  21,  21),
+        .comment => draw.Color.rgb(175,   0, 219),
+        .number  => draw.Color.rgb(  9, 136,  90),
+        .builtin => draw.Color.rgb(121,  94,  38),
+        .punctuation => draw.Color.rgb(79, 79, 79),
+        .identifier => draw.Color.rgb(27,  27,  27),
+        .identifier_decl => draw.Color.rgb(20, 80, 219)
+    };
+}
 
 pub const WindowId = packed struct(u32) {
     index: u24,
@@ -64,7 +90,7 @@ pub const Window = struct {
 
     // No deinit — Window owns no heap memory.
 
-    pub fn buildDrawList(self: *Window, dl: *draw.DrawList, buf: *const Buffer, cs: *const CursorSet, pool: *const CursorPool, highlights: []const Match, cursor_visible: bool, dark_mode: bool) !void {
+    pub fn buildDrawList(self: *Window, dl: *draw.DrawList, buf: *const Buffer, cs: *const CursorSet, pool: *const CursorPool, highlights: []const Match, spans: []const highlight.Span, cursor_visible: bool, dark_mode: bool) !void {
         const bg_color   = if (dark_mode) draw.Color.rgb(27, 27, 27)   else draw.Color.rgb(247, 247, 247);
         const text_color = if (dark_mode) draw.Color.rgb(204, 204, 204) else draw.Color.rgb(27, 27, 27);
 
@@ -82,6 +108,8 @@ pub const Window = struct {
         var line_y: f32 = -self.scroll_y;
         var line_start: usize = 0;
         var i: usize = 0;
+        // span_idx advances across lines so we never scan from the start each line.
+        var span_idx: usize = 0;
         while (i <= content.len) : (i += 1) {
             const at_end = i == content.len;
             const at_newline = !at_end and content[i] == '\n';
@@ -113,12 +141,38 @@ pub const Window = struct {
                         try dl.fillRect(.{ .x = hx, .y = line_y, .w = hw, .h = line_height }, color);
                     }
 
-                    try dl.drawText(
-                        gutter_width, baseline,
-                        content[line_start..i],
-                        text_color,
-                        self.font_size,
-                    );
+                    // Advance span_idx past spans that ended before this line.
+                    while (span_idx < spans.len and spans[span_idx].end <= line_start) span_idx += 1;
+
+                    // Draw line text in colored segments.
+                    var pos: usize = line_start;
+                    var x: f32 = gutter_width;
+                    var si: usize = span_idx;
+                    while (pos < i) {
+                        if (si < spans.len and spans[si].start < i) {
+                            const span = spans[si];
+                            const seg_s = @max(span.start, pos);
+                            const seg_e = @min(span.end, i);
+                            // Default-colored text before this span.
+                            if (seg_s > pos) {
+                                const pre = content[pos..seg_s];
+                                try dl.drawText(x, baseline, pre, text_color, self.font_size);
+                                x += platform.measureText(pre, self.font_size);
+                                pos = seg_s;
+                            }
+                            // Colored span text.
+                            if (seg_e > pos) {
+                                const seg = content[pos..seg_e];
+                                try dl.drawText(x, baseline, seg, tagColor(span.tag, dark_mode), self.font_size);
+                                x += platform.measureText(seg, self.font_size);
+                                pos = seg_e;
+                            }
+                            if (span.end <= i) si += 1 else break;
+                        } else {
+                            try dl.drawText(x, baseline, content[pos..i], text_color, self.font_size);
+                            break;
+                        }
+                    }
                 }
                 line_start = i + 1;
                 line_y += line_height;

@@ -52,6 +52,9 @@ export fn set_dark_mode(is_dark: u32) void {
     editor.dark_mode = is_dark != 0;
 }
 
+// Satisfy musl's CRT symbol requirement; never actually called (entry = .disabled).
+export fn main() c_int { return 0; }
+
 pub fn panic(msg: []const u8, _: ?*std.builtin.StackTrace, _: ?usize) noreturn {
     _ = msg;
     @trap();
