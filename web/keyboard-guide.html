@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>chop editor keyboard reference</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: #f0f4f8;
+      font-family: 'Courier New', Courier, monospace;
+      padding: 24px;
+    }
+    .keyboard {
+      background: #ffffff;
+      padding: 24px 20px;
+      border-radius: 12px;
+      max-width: 1200px;
+      margin: 0 auto;
+      overflow-x: auto;
+    }
+    .title-wrap {
+      text-align: center;
+      margin-bottom: 16px;
+    }
+    h1 {
+      font-family: 'Courier New', Courier, monospace;
+      font-size: 22px;
+      font-weight: 700;
+      color: #1a3a5c;
+      padding: 6px 24px;
+      display: inline-block;
+      border: 2.5px solid #6a9fc4;
+      border-radius: 6px;
+      background: #ffffff;
+      letter-spacing: 1px;
+    }
+    .key-row {
+      display: flex;
+      gap: 3px;
+      margin-bottom: 3px;
+      align-items: flex-start;
+    }
+    .key {
+      width: 72px;
+      height: 72px;
+      background: #c5ddf0;
+      border: 1.5px solid #8bb8d9;
+      border-radius: 5px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      padding: 3px 4px;
+      cursor: default;
+      transition: background 0.15s;
+      box-shadow: 0 1.5px 0 #6a9fc4;
+      flex-shrink: 0;
+      overflow: hidden;
+    }
+    .key:hover { background: #b0cfea; }
+    .key-half {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      gap: 3px;
+      overflow: hidden;
+    }
+    .key-glyph {
+      font-weight: 800;
+      color: #1a3a5c;
+      line-height: 1;
+      flex-shrink: 0;
+      width: 18px;
+      text-align: left;
+    }
+    .key-glyph-shift { font-size: 20px; }
+    .key-glyph-base  { font-size: 20px; }
+    .key-cmd {
+      font-size: 7.5px;
+      color: #1a3a5c;
+      font-weight: 600;
+      white-space: pre-line;
+      line-height: 1.1;
+      flex: 1;
+      overflow: hidden;
+    }
+    .key-divider {
+      height: 1px;
+      background: #8bb8d9;
+      margin: 0 -4px;
+    }
+    .special-key {
+      height: 72px;
+      background: #a3c8e3;
+      border: 1.5px solid #6a9fc4;
+      border-radius: 5px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      font-size: 13px;
+      font-weight: 700;
+      color: #1a3a5c;
+      box-shadow: 0 1.5px 0 #6a9fc4;
+      cursor: default;
+      flex-shrink: 0;
+    }
+    .special-key .sublabel {
+      font-size: 8px;
+      font-weight: 600;
+      margin-top: 2px;
+      color: #4a7a9e;
+    }
+    .del-key {
+      width: 95px;
+      height: 72px;
+      background: #a3c8e3;
+      border: 1.5px solid #6a9fc4;
+      border-radius: 5px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      padding: 3px 5px;
+      box-shadow: 0 1.5px 0 #6a9fc4;
+      flex-shrink: 0;
+      cursor: default;
+    }
+    .del-key .key-half { gap: 3px; }
+    .del-key .key-divider { background: #6a9fc4; margin: 0 -5px; }
+    .del-key .key-glyph { color: #1a3a5c; width: 18px; }
+    .del-glyph-shift { font-size: 15px; font-weight: 800; line-height: 1; flex-shrink: 0; }
+    .del-glyph-base  { font-size: 17px; font-weight: 800; line-height: 1; flex-shrink: 0; }
+    .del-cmd { font-size: 7px; font-weight: 600; color: #1a3a5c; line-height: 1.1; white-space: pre-line; }
+    .space-bar {
+      height: 72px;
+      background: #c5ddf0;
+      border: 1.5px solid #8bb8d9;
+      border-radius: 5px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      font-weight: 600;
+      color: #4a7a9e;
+      box-shadow: 0 1.5px 0 #6a9fc4;
+      flex-shrink: 0;
+    }
+  </style>
+</head>
+<body>
+<div class="keyboard">
+  <div class="title-wrap">
+    <h1>chop editor keyboard reference</h1>
+  </div>
+  <div id="keyboard-rows"></div>
+</div>
+
+<script>
+const C = {
+  keyBg: '#c5ddf0',
+  keyBgHover: '#b0cfea',
+  border: '#8bb8d9',
+  borderDark: '#6a9fc4',
+  escBg: '#a3c8e3',
+  text: '#1a3a5c',
+  textMuted: '#4a7a9e',
+};
+
+const ROW_NUMBER = [
+  { base: '`', shift: '~',  baseCmd: '',                    shiftCmd: '' },
+  { base: '1', shift: '!',  baseCmd: '',                    shiftCmd: '' },
+  { base: '2', shift: '@',  baseCmd: '',                    shiftCmd: '' },
+  { base: '3', shift: '#',  baseCmd: '',                    shiftCmd: '' },
+  { base: '4', shift: '$',  baseCmd: '',                    shiftCmd: '' },
+  { base: '5', shift: '%',  baseCmd: '',                    shiftCmd: '' },
+  { base: '6', shift: '^',  baseCmd: '',                    shiftCmd: '' },
+  { base: '7', shift: '&',  baseCmd: '',                    shiftCmd: '' },
+  { base: '8', shift: '*',  baseCmd: '',                    shiftCmd: 'select\nall matches' },
+  { base: '9', shift: '(',  baseCmd: '',                    shiftCmd: '' },
+  { base: '0', shift: ')',  baseCmd: '',                    shiftCmd: '' },
+  { base: '-', shift: '_',  baseCmd: '',                    shiftCmd: '' },
+  { base: '=', shift: '+',  baseCmd: '',                    shiftCmd: '' },
+];
+
+const ROW_Q = [
+  { base: 'q', shift: 'Q',  baseCmd: 'start/stop\nmacro rec.', shiftCmd: 'play\nmacro' },
+  { base: 'w', shift: 'W',  baseCmd: 'move fwd\nword',         shiftCmd: 'select\nforward' },
+  { base: 'e', shift: 'E',  baseCmd: 'expand\nsyntax sel.',    shiftCmd: 'shrink\nsyntax sel.' },
+  { base: 'r', shift: 'R',  baseCmd: 'replace\nchar fwd',      shiftCmd: 'replace\nchar back' },
+  { base: 't', shift: 'T',  baseCmd: 'transpose\nletters',     shiftCmd: 'transpose\nwords' },
+  { base: 'y', shift: 'Y',  baseCmd: 'copy',                   shiftCmd: 'paste' },
+  { base: 'u', shift: 'U',  baseCmd: 'undo',                   shiftCmd: 'redo' },
+  { base: 'i', shift: 'I',  baseCmd: 'enter\ninsert mode',     shiftCmd: 'insert at\nbeg. of line' },
+  { base: 'o', shift: 'O',  baseCmd: 'open\nbelow',            shiftCmd: 'open\nabove' },
+  { base: 'p', shift: 'P',  baseCmd: 'prev\nmatch',            shiftCmd: 'add sel.\nprev match' },
+  { base: '[', shift: '{',  baseCmd: 'begin\nof line',         shiftCmd: 'sel. to\nbeg. of line' },
+  { base: ']', shift: '}',  baseCmd: 'end\nof line',           shiftCmd: 'sel. to\nend of line' },
+  { base: '\\',shift: '|',  baseCmd: '',                       shiftCmd: '' },
+];
+
+const ROW_A = [
+  { base: 'a', shift: 'A',  baseCmd: 'around',                 shiftCmd: 'around\ninclusive' },
+  { base: 's', shift: 'S',  baseCmd: 'narrow\nselection',      shiftCmd: 'complement\nnarrow sel.' },
+  { base: 'd', shift: 'D',  baseCmd: 'delete\n(no cut)',        shiftCmd: 'delete\nlines' },
+  { base: 'f', shift: 'F',  baseCmd: 'sneak',                  shiftCmd: 'reverse\nsneak' },
+  { base: 'g', shift: 'G',  baseCmd: 'goto\ncmds',             shiftCmd: '??' },
+  { base: 'h', shift: 'H',  baseCmd: '←',                      shiftCmd: 'select\n←' },
+  { base: 'j', shift: 'J',  baseCmd: '↓',                      shiftCmd: 'add cursor\nbelow' },
+  { base: 'k', shift: 'K',  baseCmd: '↑',                      shiftCmd: 'add cursor\nabove' },
+  { base: 'l', shift: 'L',  baseCmd: '→',                      shiftCmd: 'select\n→' },
+  { base: ';', shift: ':',  baseCmd: 'collapse\nselections',   shiftCmd: 'drop\ncursors' },
+  { base: "'", shift: '"',  baseCmd: 'insert\nat eol',         shiftCmd: 'modifier\nkey' },
+];
+
+const ROW_Z = [
+  { base: 'z', shift: 'Z',  baseCmd: 'viewport/\nwindow cmds', shiftCmd: '??' },
+  { base: 'x', shift: 'X',  baseCmd: 'select\nline down',      shiftCmd: 'select\nline up' },
+  { base: 'c', shift: 'C',  baseCmd: 'cut',                    shiftCmd: 'cursor\nsubfamily' },
+  { base: 'v', shift: 'V',  baseCmd: 'filter sel.\nto match',  shiftCmd: 'inverse\nfilter sel.' },
+  { base: 'b', shift: 'B',  baseCmd: 'word\nbackward',         shiftCmd: 'select word\nbackward' },
+  { base: 'n', shift: 'N',  baseCmd: 'next\nmatch',            shiftCmd: 'add sel. to\nnext match' },
+  { base: 'm', shift: 'M',  baseCmd: 'match del/\nsurr./repl.',shiftCmd: '' },
+  { base: ',', shift: '<',  baseCmd: '??',                     shiftCmd: '' },
+  { base: '.', shift: '>',  baseCmd: 'repeat\nlast action',    shiftCmd: '' },
+  { base: '/', shift: '?',  baseCmd: 'fwd\nsearch',            shiftCmd: 'back\nsearch' },
+];
+
+function makeKey(data) {
+  const { base, shift, baseCmd = '', shiftCmd = '', w = 1 } = data;
+  const el = document.createElement('div');
+  el.className = 'key';
+  el.style.width = (w * 72) + 'px';
+
+  // Top half (shift)
+  const top = document.createElement('div');
+  top.className = 'key-half';
+
+  const shiftGlyph = document.createElement('div');
+  shiftGlyph.className = 'key-glyph key-glyph-shift';
+  shiftGlyph.textContent = shift;
+
+  const shiftCmd2 = document.createElement('div');
+  shiftCmd2.className = 'key-cmd';
+  shiftCmd2.textContent = shiftCmd;
+
+  top.appendChild(shiftGlyph);
+  top.appendChild(shiftCmd2);
+
+  // Divider
+  const divider = document.createElement('div');
+  divider.className = 'key-divider';
+
+  // Bottom half (base)
+  const bot = document.createElement('div');
+  bot.className = 'key-half';
+
+  const baseGlyph = document.createElement('div');
+  baseGlyph.className = 'key-glyph key-glyph-base';
+  baseGlyph.textContent = base;
+
+  const baseCmd2 = document.createElement('div');
+  baseCmd2.className = 'key-cmd';
+  baseCmd2.textContent = baseCmd;
+
+  bot.appendChild(baseGlyph);
+  bot.appendChild(baseCmd2);
+
+  el.appendChild(top);
+  el.appendChild(divider);
+  el.appendChild(bot);
+
+  el.addEventListener('mouseenter', () => el.style.background = C.keyBgHover);
+  el.addEventListener('mouseleave', () => el.style.background = C.keyBg);
+
+  return el;
+}
+
+function makeSpecialKey(label, sublabel, width, fontSize) {
+  width = width || 72;
+  fontSize = fontSize || 13;
+  const el = document.createElement('div');
+  el.className = 'special-key';
+  el.style.width = width + 'px';
+  el.style.fontSize = fontSize + 'px';
+
+  const span = document.createElement('span');
+  span.textContent = label;
+  el.appendChild(span);
+
+  if (sublabel) {
+    const sub = document.createElement('span');
+    sub.className = 'sublabel';
+    sub.textContent = sublabel;
+    el.appendChild(sub);
+  }
+  return el;
+}
+
+function makeDelKey() {
+  const el = document.createElement('div');
+  el.className = 'del-key';
+
+  const top = document.createElement('div');
+  top.className = 'key-half';
+  const tg = document.createElement('div');
+  tg.className = 'del-glyph-shift';
+  tg.style.color = C.text;
+  tg.textContent = '⇧⌫';
+  const tc = document.createElement('div');
+  tc.className = 'del-cmd';
+  tc.textContent = 'delete\nforward';
+  top.appendChild(tg);
+  top.appendChild(tc);
+
+  const divider = document.createElement('div');
+  divider.className = 'key-divider del-key-divider';
+  divider.style.height = '1px';
+  divider.style.background = C.borderDark;
+  divider.style.margin = '0 -5px';
+
+  const bot = document.createElement('div');
+  bot.className = 'key-half';
+  const bg = document.createElement('div');
+  bg.className = 'del-glyph-base';
+  bg.style.color = C.text;
+  bg.textContent = '⌫';
+  const bc = document.createElement('div');
+  bc.className = 'del-cmd';
+  bc.textContent = 'delete\nbehind';
+  bot.appendChild(bg);
+  bot.appendChild(bc);
+
+  el.appendChild(top);
+  el.appendChild(divider);
+  el.appendChild(bot);
+  return el;
+}
+
+function makeSpacerPx(px) {
+  const el = document.createElement('div');
+  el.style.width = px + 'px';
+  el.style.flexShrink = '0';
+  return el;
+}
+
+function makeRow(children) {
+  const row = document.createElement('div');
+  row.className = 'key-row';
+  children.forEach(c => row.appendChild(c));
+  return row;
+}
+
+function makeSpaceBar(width) {
+  const el = document.createElement('div');
+  el.className = 'space-bar';
+  el.style.width = width + 'px';
+  el.textContent = 'Space';
+  return el;
+}
+
+const container = document.getElementById('keyboard-rows');
+
+// Row 1: Esc + number row + del key
+container.appendChild(makeRow([
+  ...ROW_NUMBER.map(k => makeKey(k)),
+  makeDelKey(),
+]));
+
+// Row 2: Tab + Q row + \ key
+container.appendChild(makeRow([
+  makeSpecialKey('Tab', null, 90, 11),
+  makeSpacerPx(2),
+  ...ROW_Q.map(k => makeKey(k)),
+]));
+
+// Row 3: Caps + A row + Enter
+container.appendChild(makeRow([
+  makeSpecialKey('Esc', 'leave insert', 100, 11),
+  makeSpacerPx(2),
+  ...ROW_A.map(k => makeKey(k)),
+  makeSpecialKey('Enter', null, 137, 11),
+]));
+
+// Row 4: Shift + Z row + Shift
+container.appendChild(makeRow([
+  makeSpecialKey('Shift', null, 165, 11),
+  makeSpacerPx(2),
+  ...ROW_Z.map(k => makeKey(k)),
+  makeSpecialKey('Shift', null, 148, 11),
+]));
+
+// Row 5: space bar row
+container.appendChild(makeRow([
+  makeSpacerPx(170),
+  makeSpecialKey('Ctrl', null, 72, 10),
+  makeSpecialKey('Alt', null, 72, 10),
+  makeSpaceBar(372),
+  makeSpecialKey('Alt', null, 72, 10),
+  makeSpecialKey('Ctrl', null, 72, 10),
+]));
+</script>
+</body>
+</html>
