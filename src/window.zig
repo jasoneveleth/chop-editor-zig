@@ -104,111 +104,110 @@ pub const Window = struct {
         const gutter_width: f32 = 8;
         const content = buf.bytes();
 
+        const line_starts = buf.lineStarts();
+        const line_count  = buf.lineCount();
+
+        // First visible line (floor of scroll_y / line_height, clamped).
+        const first_line: usize = @min(
+            @as(usize, @intFromFloat(self.scroll_y / line_height)),
+            line_count - 1,
+        );
+
+        // Seed span_idx at the first span not fully before the first visible line.
+        var span_idx: usize = blk: {
+            const first_byte = line_starts[first_line];
+            var lo: usize = 0;
+            var hi: usize = spans.len;
+            while (lo < hi) {
+                const mid = lo + (hi - lo) / 2;
+                if (spans[mid].end <= first_byte) lo = mid + 1 else hi = mid;
+            }
+            break :blk lo;
+        };
+
         // Render visible lines — highlights drawn before text so text sits on top.
-        var line_y: f32 = -self.scroll_y;
-        var line_start: usize = 0;
-        var i: usize = 0;
-        // span_idx advances across lines so we never scan from the start each line.
-        var span_idx: usize = 0;
-        while (i <= content.len) : (i += 1) {
-            const at_end = i == content.len;
-            const at_newline = !at_end and content[i] == '\n';
-            if (at_newline or at_end) {
-                const baseline = line_y + self.font_size;
-                if (baseline >= 0 and line_y < self.height) {
-                    // Draw selection highlights.
-                    for (cs.iter(pool)) |cursor| {
-                        if (!cursor.isSelection()) continue;
-                        const ov_s = @max(cursor.start(), line_start);
-                        const ov_e = @min(cursor.end(), i);
-                        if (ov_s >= ov_e) continue;
-                        const hx = gutter_width + platform.measureText(content[line_start..ov_s], self.font_size);
-                        const hw = platform.measureText(content[ov_s..ov_e], self.font_size);
-                        try dl.fillRect(.{ .x = hx, .y = line_y, .w = hw, .h = line_height }, draw.Color.rgba(38, 120, 200, 120));
-                    }
+        for (first_line..line_count) |ln| {
+            const line_start = line_starts[ln];
+            const line_end   = if (ln + 1 < line_count) line_starts[ln + 1] - 1 else content.len;
+            const line_y     = -self.scroll_y + @as(f32, @floatFromInt(ln)) * line_height;
+            const baseline   = line_y + self.font_size;
 
-                    // Draw match highlights for this line.
-                    for (highlights, 0..) |m, mi| {
-                        const m_start = @max(m.start, line_start);
-                        const m_end   = @min(m.end,   i);
-                        if (m_start >= m_end) continue;
-                        const hx = gutter_width + platform.measureText(content[line_start..m_start], self.font_size);
-                        const hw = platform.measureText(content[m_start..m_end], self.font_size);
-                        const color = if (mi == 0)
-                            draw.Color.rgba(255, 200, 0, 180) // first match: emphasized
-                        else
-                            draw.Color.rgba(255, 200, 0, 60);  // rest: dim
-                        try dl.fillRect(.{ .x = hx, .y = line_y, .w = hw, .h = line_height }, color);
-                    }
+            if (line_y >= self.height) break;
 
-                    // Advance span_idx past spans that ended before this line.
-                    while (span_idx < spans.len and spans[span_idx].end <= line_start) span_idx += 1;
+            // Advance span_idx past spans that ended before this line.
+            while (span_idx < spans.len and spans[span_idx].end <= line_start) span_idx += 1;
 
-                    // Draw line text in colored segments.
-                    var pos: usize = line_start;
-                    var x: f32 = gutter_width;
-                    var si: usize = span_idx;
-                    while (pos < i) {
-                        if (si < spans.len and spans[si].start < i) {
-                            const span = spans[si];
-                            const seg_s = @max(span.start, pos);
-                            const seg_e = @min(span.end, i);
-                            // Default-colored text before this span.
-                            if (seg_s > pos) {
-                                const pre = content[pos..seg_s];
-                                try dl.drawText(x, baseline, pre, text_color, self.font_size);
-                                x += platform.measureText(pre, self.font_size);
-                                pos = seg_s;
-                            }
-                            // Colored span text.
-                            if (seg_e > pos) {
-                                const seg = content[pos..seg_e];
-                                try dl.drawText(x, baseline, seg, tagColor(span.tag, dark_mode), self.font_size);
-                                x += platform.measureText(seg, self.font_size);
-                                pos = seg_e;
-                            }
-                            if (span.end <= i) si += 1 else break;
-                        } else {
-                            try dl.drawText(x, baseline, content[pos..i], text_color, self.font_size);
-                            break;
-                        }
+            // Draw selection highlights.
+            for (cs.iter(pool)) |cursor| {
+                if (!cursor.isSelection()) continue;
+                const ov_s = @max(cursor.start(), line_start);
+                const ov_e = @min(cursor.end(), line_end);
+                if (ov_s >= ov_e) continue;
+                const hx = gutter_width + platform.measureText(content[line_start..ov_s], self.font_size);
+                const hw = platform.measureText(content[ov_s..ov_e], self.font_size);
+                try dl.fillRect(.{ .x = hx, .y = line_y, .w = hw, .h = line_height }, draw.Color.rgba(38, 120, 200, 120));
+            }
+
+            // Draw match highlights for this line.
+            for (highlights, 0..) |m, mi| {
+                const m_start = @max(m.start, line_start);
+                const m_end   = @min(m.end,   line_end);
+                if (m_start >= m_end) continue;
+                const hx = gutter_width + platform.measureText(content[line_start..m_start], self.font_size);
+                const hw = platform.measureText(content[m_start..m_end], self.font_size);
+                const color = if (mi == 0)
+                    draw.Color.rgba(255, 200, 0, 180) // first match: emphasized
+                else
+                    draw.Color.rgba(255, 200, 0, 60);  // rest: dim
+                try dl.fillRect(.{ .x = hx, .y = line_y, .w = hw, .h = line_height }, color);
+            }
+
+            // Draw line text in colored segments.
+            var pos: usize = line_start;
+            var x: f32 = gutter_width;
+            var si: usize = span_idx;
+            while (pos < line_end) {
+                if (si < spans.len and spans[si].start < line_end) {
+                    const span = spans[si];
+                    const seg_s = @max(span.start, pos);
+                    const seg_e = @min(span.end, line_end);
+                    // Default-colored text before this span.
+                    if (seg_s > pos) {
+                        const pre = content[pos..seg_s];
+                        try dl.drawText(x, baseline, pre, text_color, self.font_size);
+                        x += platform.measureText(pre, self.font_size);
+                        pos = seg_s;
                     }
+                    // Colored span text.
+                    if (seg_e > pos) {
+                        const seg = content[pos..seg_e];
+                        try dl.drawText(x, baseline, seg, tagColor(span.tag, dark_mode), self.font_size);
+                        x += platform.measureText(seg, self.font_size);
+                        pos = seg_e;
+                    }
+                    if (span.end <= line_end) si += 1 else break;
+                } else {
+                    try dl.drawText(x, baseline, content[pos..line_end], text_color, self.font_size);
+                    break;
                 }
-                line_start = i + 1;
-                line_y += line_height;
-                if (line_y > self.height) break;
             }
         }
 
         // Draw each cursor at its accurate screen position.
-        const normal_color = draw.Color.rgb(0, 196, 255); // #00C4FF
+        const normal_color = draw.Color.rgb(0, 196, 255);   // #00C4FF
         const insert_color = draw.Color.rgb(255, 116, 108); // #FFA66C
         const cursor_color = if (self.mode == .insert) insert_color else normal_color;
 
         for (cs.iter(pool)) |cursor| {
-            var cl_start: usize = 0;
-            var cl_y: f32 = -self.scroll_y;
-            var j: usize = 0;
-            while (j <= content.len) : (j += 1) {
-                const at_end_j = j == content.len;
-                const at_nl_j = !at_end_j and content[j] == '\n';
-                if (at_nl_j or at_end_j) {
-                    if (cursor.head >= cl_start and cursor.head <= j) {
-                        if (cl_y + line_height >= 0 and cl_y < self.height) {
-                            const cx = gutter_width + platform.measureText(
-                                content[cl_start..cursor.head],
-                                self.font_size,
-                            );
-                            if (cursor_visible) try dl.fillRect(
-                                .{ .x = cx - 1, .y = cl_y, .w = 2, .h = line_height },
-                                cursor_color,
-                            );
-                        }
-                        break;
-                    }
-                    cl_start = j + 1;
-                    cl_y += line_height;
-                }
+            const ln      = buf.lineAt(cursor.head);
+            const cl_start = line_starts[ln];
+            const cl_y    = -self.scroll_y + @as(f32, @floatFromInt(ln)) * line_height;
+            if (cl_y + line_height >= 0 and cl_y < self.height) {
+                const cx = gutter_width + platform.measureText(content[cl_start..cursor.head], self.font_size);
+                if (cursor_visible) try dl.fillRect(
+                    .{ .x = cx - 1, .y = cl_y, .w = 2, .h = line_height },
+                    cursor_color,
+                );
             }
         }
     }

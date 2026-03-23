@@ -335,7 +335,7 @@ pub const Editor = struct {
     pub fn createBuffer(self: *Editor) !BufferId {
         const index: u24 = @intCast(self.buffers.items.len);
         const id = BufferId{ .index = index, .generation = 0 };
-        try self.buffers.append(self.allocator, Buffer.init(self.allocator));
+        try self.buffers.append(self.allocator, try Buffer.init(self.allocator));
         const h = try Highlighter.init(self.allocator, id);
         try self.highlighters.append(self.allocator, h);
         return id;
@@ -403,7 +403,7 @@ pub const Editor = struct {
             const end = @min(pos + len, buf.content.items.len);
             self.undo_stack.recordDelete(self.allocator, pos, buf.content.items[pos..end]);
         }
-        buf.delete(pos, len);
+        buf.delete(pos, len) catch {};
         const key: u32 = @bitCast(buffer_id);
         if (self.buffer_cursor_sets.get(key)) |ids| {
             for (ids.items) |cs_id| {

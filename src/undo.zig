@@ -176,7 +176,7 @@ pub const UndoHistory = struct {
             i -= 1;
             const op = self.ops.items[i];
             switch (op.kind) {
-                .insert => buf.delete(op.pos, op.len),
+                .insert => buf.delete(op.pos, op.len) catch {},
                 .delete => buf.insert(
                     op.pos,
                     self.text.items[@intFromEnum(op.text_start) .. @intFromEnum(op.text_start) + op.len],
@@ -199,7 +199,7 @@ pub const UndoHistory = struct {
                     op.pos,
                     self.text.items[@intFromEnum(op.text_start) .. @intFromEnum(op.text_start) + op.len],
                 ) catch {},
-                .delete => buf.delete(op.pos, op.len),
+                .delete => buf.delete(op.pos, op.len) catch {},
             }
         }
         cs.restoreFrom(pool, node.cursor_start, node.cursor_len);
