@@ -1615,7 +1615,10 @@ pub const Editor = struct {
                     win.preferred_col = null;
                     self.insertAtCursors(win, cs, "\n");
                 },
-                else => if (key.isPrintable() and mods & MOD_CTRL != 0 and @intFromEnum(key) == 'w') {
+                else => if (key.isPrintable() and mods & MOD_CTRL != 0 and @intFromEnum(key) == 'y') {
+                    win.preferred_col = null;
+                    self.paste(win, cs);
+                } else if (key.isPrintable() and mods & MOD_CTRL != 0 and @intFromEnum(key) == 'w') {
                     win.preferred_col = null;
                     const buf = self.bufOf(win.buffer_id);
                     const content = buf.bytes();
