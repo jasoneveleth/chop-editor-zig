@@ -872,6 +872,7 @@ pub const Editor = struct {
         self.undo_stack.undo(buf, cs, &self.cursor_pool);
         win.preferred_col = null;
         self.palette.matches_stale = true;
+        self.highlighters.items[win.buffer_id.index].rehighlight(buf.bytes()) catch {};
     }
 
     fn applyRedo(self: *Editor, win: *Window, cs: *CursorSet) void {
@@ -879,6 +880,7 @@ pub const Editor = struct {
         self.undo_stack.redo(buf, cs, &self.cursor_pool);
         win.preferred_col = null;
         self.palette.matches_stale = true;
+        self.highlighters.items[win.buffer_id.index].rehighlight(buf.bytes()) catch {};
     }
 
     fn applyUndoOlder(self: *Editor, win: *Window, cs: *CursorSet) void {
@@ -886,6 +888,7 @@ pub const Editor = struct {
         self.undo_stack.undoOlder(buf, cs, &self.cursor_pool);
         win.preferred_col = null;
         self.palette.matches_stale = true;
+        self.highlighters.items[win.buffer_id.index].rehighlight(buf.bytes()) catch {};
     }
 
     fn applyUndoNewer(self: *Editor, win: *Window, cs: *CursorSet) void {
@@ -893,6 +896,7 @@ pub const Editor = struct {
         self.undo_stack.undoNewer(buf, cs, &self.cursor_pool);
         win.preferred_col = null;
         self.palette.matches_stale = true;
+        self.highlighters.items[win.buffer_id.index].rehighlight(buf.bytes()) catch {};
     }
 
     pub fn onKeyDown(self: *Editor, time_ms: f64, key: Key, mods: u32) void {
