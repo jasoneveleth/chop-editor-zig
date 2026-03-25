@@ -754,6 +754,8 @@ pub const Editor = struct {
             items[idx].head = pos + (idx + 1) * text.len;
             items[idx].anchor = items[idx].head;
         }
+        self.palette.matches_stale = true;
+        self.highlighters.items[win.buffer_id.index].rehighlight(buf_obj.bytes()) catch {};
     }
 
     const Dir = enum { left, right, up, down };
@@ -1614,6 +1616,10 @@ pub const Editor = struct {
                 .enter => {
                     win.preferred_col = null;
                     self.insertAtCursors(win, cs, "\n");
+                },
+                .tab => {
+                    win.preferred_col = null;
+                    self.insertAtCursors(win, cs, "    ");
                 },
                 else => if (key.isPrintable() and mods & MOD_CTRL != 0 and @intFromEnum(key) == 'y') {
                     win.preferred_col = null;
