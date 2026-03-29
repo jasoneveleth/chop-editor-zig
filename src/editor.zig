@@ -747,8 +747,7 @@ pub const Editor = struct {
 
         // Match count hint.
         if (self.palette.matches.items.len > 0) {
-            var count_buf: [32]u8 = undefined;
-            const count_str = std.fmt.bufPrint(&count_buf, "{d} matches", .{self.palette.matches.items.len}) catch "";
+            const count_str = std.fmt.bufPrint(&self.palette.count_buf, "{d} matches", .{self.palette.matches.items.len}) catch "";
             const count_x = pal_x + pal_w - platform.measureText(count_str, font_size) - 14;
             try dl.drawText(count_x, baseline, count_str, pal_dim, font_size);
         }

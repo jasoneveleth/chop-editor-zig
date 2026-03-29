@@ -33,6 +33,10 @@ pub const Palette = struct {
     matches_stale: bool = false,
     /// Non-null when the palette is open. Stores config for the current prompt session.
     active: ?PaletteConfig = null,
+    /// Scratch buffer for the match-count string passed to the DrawList.
+    /// Must not be stack-allocated — DrawList stores raw slices that are
+    /// rendered after the drawPalette stack frame is gone.
+    count_buf: [32]u8 = undefined,
 
     pub fn init(buffer_id: BufferId, cursor_set_id: CursorSetId) Palette {
         return .{
