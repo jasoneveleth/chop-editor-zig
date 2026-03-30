@@ -9,15 +9,22 @@ const CursorSet = @import("cursor_set.zig").CursorSet;
 const CursorSetId = @import("cursor_set.zig").CursorSetId;
 const CursorPool = @import("cursor_set.zig").CursorPool;
 const MAX_CURSORS = @import("cursor_set.zig").MAX_CURSORS;
-const Cursor = @import("cursor.zig").Cursor;
+const cursor_mod = @import("cursor.zig");
+const Cursor = cursor_mod.Cursor;
 const Key = @import("key.zig").Key;
 const MOD_CTRL = @import("key.zig").MOD_CTRL;
 const MOD_SHIFT = @import("key.zig").MOD_SHIFT;
 const MOD_ALT = @import("key.zig").MOD_ALT;
-const Palette = @import("palette.zig").Palette;
-const Match = @import("palette.zig").Match;
-const PaletteConfig = @import("palette.zig").PaletteConfig;
-const PickerItem = @import("palette.zig").PickerItem;
+const palette_mod = @import("palette.zig");
+const Palette = palette_mod.Palette;
+const Match = palette_mod.Match;
+const PaletteConfig = palette_mod.PaletteConfig;
+const PickerItem = palette_mod.PickerItem;
+const findNextMatchFrom = palette_mod.findNextMatchFrom;
+const findPrevMatchFrom = palette_mod.findPrevMatchFrom;
+const SETTINGS_ITEMS = palette_mod.SETTINGS_ITEMS;
+const TAB_WIDTH_ITEMS = palette_mod.TAB_WIDTH_ITEMS;
+const LANGUAGE_ITEMS = palette_mod.LANGUAGE_ITEMS;
 const Op = @import("op.zig").Op;
 const OpQueue = @import("op_queue.zig").OpQueue;
 const platform = @import("platform/web.zig");
@@ -25,66 +32,7 @@ const grapheme = @import("grapheme.zig");
 const undo_mod = @import("undo.zig");
 const UndoStack = undo_mod.UndoHistory;
 const Highlighter = @import("highlighter.zig").Highlighter;
-
-const FILLER_TEXT =
-    \\pub const Cursor = struct {
-    \\    /// The active (moving) end of the selection.
-    \\    head: usize,
-    \\    /// The fixed end of the selection. Equal to head when there is no selection.
-    \\    anchor: usize,
-    \\
-    \\    pub fn init(pos: usize) Cursor {
-    \\        const pos1 = pos + 1;
-    \\        return .{ .head = pos, .anchor = pos1 };
-    \\    }
-    \\
-    \\    pub fn start(self: Cursor) usize {
-    \\        return @min(self.head, self.anchor);
-    \\    }
-    \\
-    \\    pub fn end(self: Cursor) usize {
-    \\        return @max(self.head, self.anchor);
-    \\    }
-    \\
-    \\    pub fn isSelection(self: Cursor) bool {
-    \\        return self.head != self.anchor;
-    \\    }
-    \\
-    \\    pub fn adjustForInsert(self: *Cursor, pos: usize, len: usize) void {
-    \\        if (self.head >= pos) self.head += len;
-    \\        if (self.anchor >= pos) self.anchor += len;
-    \\    }
-    \\
-    \\    pub fn adjustForDelete(self: *Cursor, pos: usize, len: usize) void {
-    \\        self.head = clampDelete(self.head, pos, len);
-    \\        self.anchor = clampDelete(self.anchor, pos, len);
-    \\    }
-    \\};
-    \\
-    \\fn clampDelete(v: usize, pos: usize, len: usize) usize {
-    \\    if (v <= pos) return v;
-    \\    if (v < pos + len) return pos;
-    \\    return v - len;
-    \\}
-;
-
-// ── Settings palette items ─────────────────────────────────────────────────
-
-const SETTINGS_ITEMS = [_]PickerItem{
-    .{ .label = "Tab Width", .op_on_confirm = .tab_width_palette },
-    .{ .label = "Language",  .op_on_confirm = .language_palette },
-};
-
-const TAB_WIDTH_ITEMS = [_]PickerItem{
-    .{ .label = "2", .op_on_confirm = .{ .set_tab_width = 2 } },
-    .{ .label = "4", .op_on_confirm = .{ .set_tab_width = 4 } },
-    .{ .label = "8", .op_on_confirm = .{ .set_tab_width = 8 } },
-};
-
-const LANGUAGE_ITEMS = [_]PickerItem{
-    .{ .label = "Zig",  .op_on_confirm = .{ .set_language = .zig } },
-    .{ .label = "None", .op_on_confirm = .{ .set_language = .none } },
-};
+const FILLER_TEXT = @import("filler.zig").FILLER_TEXT;
 
 // ── Cursor movement helpers ────────────────────────────────────────────────
 
@@ -101,194 +49,12 @@ fn posFromPoint(win: *const Window, content: []const u8, click_x: f32, click_y: 
         const at_nl = !at_end and content[i] == '\n';
         if (at_nl or at_end) {
             if (current_line == line_idx)
-                return closestPosToX(content, line_start, i, click_x - gutter_width, win.font_size);
+                return cursor_mod.closestPosToX(content, line_start, i, click_x - gutter_width, win.font_size);
             line_start = i + 1;
             current_line += 1;
         }
     }
     return content.len;
-}
-
-fn cursorLeft(content: []const u8, head: usize) usize {
-    return grapheme.prevGrapheme(content, head);
-}
-
-fn cursorRight(content: []const u8, head: usize) usize {
-    return grapheme.nextGrapheme(content, head);
-}
-
-fn isWordChar(c: u8) bool {
-    return std.ascii.isAlphanumeric(c) or c == '_';
-}
-
-fn isSTNL(c: u8) bool {
-    return c == ' ' or c == '\t' or c == '\n';
-}
-
-fn wordNext(content: []const u8, pos: usize) usize {
-    var i = pos;
-    if (i >= content.len) return content.len;
-    if (isWordChar(content[i])) {
-        while (i < content.len and isWordChar(content[i])) i += 1;
-    } else if (!isSTNL(content[i])) {
-        while (i < content.len and !isWordChar(content[i]) and !isSTNL(content[i])) i += 1;
-    }
-    while (i < content.len and isSTNL(content[i])) i += 1;
-    return i;
-}
-
-fn wordPrev(content: []const u8, pos: usize) usize {
-    var i = pos;
-    while (i > 0 and isSTNL(content[i - 1])) i -= 1;
-    if (i == 0) return 0;
-    if (isWordChar(content[i - 1])) {
-        while (i > 0 and isWordChar(content[i - 1])) i -= 1;
-    } else {
-        while (i > 0 and !isWordChar(content[i - 1]) and !isSTNL(content[i - 1])) i -= 1;
-    }
-    return i;
-}
-
-/// Walk graphemes on [line_start, line_end), return the byte offset whose
-/// measured x-position is closest to target_x.
-fn closestPosToX(content: []const u8, line_start: usize, line_end: usize, target_x: f32, font_size: f32) usize {
-    var it = grapheme.GraphemeIterator{ .text = content[0..line_end], .pos = @intCast(line_start) };
-    var prev_pos: usize = line_start;
-    var prev_x: f32 = 0;
-    while (it.next()) |_| {
-        const cur_pos: usize = @as(usize, it.pos);
-        const cur_x = platform.measureText(content[line_start..cur_pos], font_size);
-        if (cur_x >= target_x) {
-            return if (target_x - prev_x <= cur_x - target_x) prev_pos else cur_pos;
-        }
-        prev_pos = cur_pos;
-        prev_x = cur_x;
-    }
-    return prev_pos;
-}
-
-fn cursorUp(content: []const u8, head: usize, col_px: f32, font_size: f32) usize {
-    const ls = grapheme.lineStart(content, head);
-    if (ls == 0) return head;
-    const prev_le = ls - 1;
-    const prev_ls = grapheme.lineStart(content, prev_le);
-    return closestPosToX(content, prev_ls, prev_le, col_px, font_size);
-}
-
-fn cursorDown(content: []const u8, head: usize, col_px: f32, font_size: f32) usize {
-    const le = grapheme.findChars(content, head, "\n");
-    if (le >= content.len) return head;
-    const next_ls = le + 1;
-    const next_le = grapheme.findChars(content, next_ls, "\n");
-    return closestPosToX(content, next_ls, next_le, col_px, font_size);
-}
-
-/// First match with start >= from; wraps to first if none found.
-fn findNextMatchFrom(matches: []const Match, from: usize) ?Match {
-    for (matches) |m| if (m.start >= from) return m;
-    if (matches.len > 0) return matches[0];
-    return null;
-}
-
-/// Last match with end <= from; wraps to last if none found.
-fn findPrevMatchFrom(matches: []const Match, from: usize) ?Match {
-    var i = matches.len;
-    while (i > 0) {
-        i -= 1;
-        if (matches[i].end <= from) return matches[i];
-    }
-    if (matches.len > 0) return matches[matches.len - 1];
-    return null;
-}
-
-fn sneakForward(content: []const u8, from: usize, c1: u8, c2: u8) ?usize {
-    var i = from + 1;
-    while (i + 1 < content.len) : (i += 1) {
-        if (content[i] == c1 and content[i + 1] == c2) return i;
-    }
-    return null;
-}
-
-fn sneakBackward(content: []const u8, from: usize, c1: u8, c2: u8) ?usize {
-    var i = from;
-    while (i > 0) {
-        i -= 1;
-        if (i + 1 < content.len and content[i] == c1 and content[i + 1] == c2) return i;
-    }
-    return null;
-}
-
-fn quoteBounds(content: []const u8, pos: usize, quote: u8) ?Bounds {
-    // search backward for opening quote
-    var s = pos;
-    while (true) {
-        if (s == 0) return null;
-        s -= 1;
-        if (content[s] == quote) break;
-    }
-    // search forward for closing quote
-    var e = pos;
-    while (e < content.len and content[e] != quote) e += 1;
-    if (e >= content.len) return null;
-    return .{ .start = s, .end = e };
-}
-
-fn parenBounds(content: []const u8, pos: usize, open: u8, close: u8) ?Bounds {
-    // search backward for opening paren (tracking nesting)
-    var depth: usize = 0;
-    var s = pos;
-    while (true) {
-        if (s == 0) return null;
-        s -= 1;
-        if (content[s] == close) depth += 1
-        else if (content[s] == open) {
-            if (depth == 0) break;
-            depth -= 1;
-        }
-    }
-    // search forward for matching closing paren
-    depth = 0;
-    var e = pos;
-    while (e < content.len) : (e += 1) {
-        if (content[e] == open) depth += 1
-        else if (content[e] == close) {
-            if (depth == 0) break;
-            depth -= 1;
-        }
-    }
-    if (e >= content.len) return null;
-    return .{ .start = s, .end = e };
-}
-
-fn wordBoundsAt(content: []const u8, pos: usize) ?Bounds {
-    if (pos >= content.len or !isWordChar(content[pos])) return null;
-    var s = pos;
-    while (s > 0 and isWordChar(content[s - 1])) s -= 1;
-    var e = pos + 1;
-    while (e < content.len and isWordChar(content[e])) e += 1;
-    return .{ .start = s, .end = e };
-}
-
-const Bounds = struct { start: usize, end: usize };
-
-fn surroundPair(ch: u8) struct { open: u8, close: u8 } {
-    return switch (ch) {
-        '(', ')' => .{ .open = '(', .close = ')' },
-        '[', ']' => .{ .open = '[', .close = ']' },
-        '{', '}' => .{ .open = '{', .close = '}' },
-        '<', '>' => .{ .open = '<', .close = '>' },
-        else     => .{ .open = ch,  .close = ch  },
-    };
-}
-
-fn surroundBounds(content: []const u8, pos: usize, ch: u8) ?Bounds {
-    return switch (ch) {
-        '(', ')' => parenBounds(content, pos, '(', ')'),
-        '[', ']' => parenBounds(content, pos, '[', ']'),
-        '{', '}' => parenBounds(content, pos, '{', '}'),
-        '<', '>' => parenBounds(content, pos, '<', '>'),
-        else     => quoteBounds(content, pos, ch),
-    };
 }
 
 pub const Editor = struct {
@@ -894,7 +660,7 @@ pub const Editor = struct {
         const content = buf.bytes();
         win.preferred_col = null;
         for (cs.iter(&self.cursor_pool)) |*c| {
-            c.head = if (dir == .left) cursorLeft(content, c.head) else cursorRight(content, c.head);
+            c.head = if (dir == .left) cursor_mod.cursorLeft(content, c.head) else cursor_mod.cursorRight(content, c.head);
         }
     }
 
@@ -959,14 +725,14 @@ pub const Editor = struct {
         for (cs.iter(&self.cursor_pool)) |*c| {
             switch (dir) {
                 .left, .right => {
-                    c.head = if (dir == .left) cursorLeft(content, c.head) else cursorRight(content, c.head);
+                    c.head = if (dir == .left) cursor_mod.cursorLeft(content, c.head) else cursor_mod.cursorRight(content, c.head);
                     win.preferred_col = null;
                 },
                 .up, .down => {
                     const ls = grapheme.lineStart(content, c.head);
                     const col_px = win.preferred_col orelse platform.measureText(content[ls..c.head], win.font_size);
                     win.preferred_col = col_px;
-                    c.head = if (dir == .up) cursorUp(content, c.head, col_px, win.font_size) else cursorDown(content, c.head, col_px, win.font_size);
+                    c.head = if (dir == .up) cursor_mod.cursorUp(content, c.head, col_px, win.font_size) else cursor_mod.cursorDown(content, c.head, col_px, win.font_size);
                 },
             }
             c.anchor = c.head;
@@ -979,9 +745,9 @@ pub const Editor = struct {
         const content = buf.bytes();
         for (cs.iter(&self.cursor_pool)) |*c| {
             const result = if (forward)
-                sneakForward(content, c.head, c1, c2)
+                cursor_mod.sneakForward(content, c.head, c1, c2)
             else
-                sneakBackward(content, c.head, c1, c2);
+                cursor_mod.sneakBackward(content, c.head, c1, c2);
             if (result) |pos| {
                 c.head = pos;
                 c.anchor = pos;
@@ -1045,7 +811,7 @@ pub const Editor = struct {
                         // delete char after cursor
                         var it = cs.reverseIter(&self.cursor_pool);
                         while (it.next()) |cursor| {
-                            const next = cursorRight(content, cursor.head);
+                            const next = cursor_mod.cursorRight(content, cursor.head);
                             if (next > cursor.head)
                                 self.bufferDelete(win.buffer_id, cursor.head, next - cursor.head);
                         }
@@ -1053,7 +819,7 @@ pub const Editor = struct {
                         // delete char before cursor
                         var it = cs.reverseIter(&self.cursor_pool);
                         while (it.next()) |cursor| {
-                            const prev = cursorLeft(content, cursor.head);
+                            const prev = cursor_mod.cursorLeft(content, cursor.head);
                             if (prev < cursor.head)
                                 self.bufferDelete(win.buffer_id, prev, cursor.head - prev);
                         }
@@ -1068,7 +834,7 @@ pub const Editor = struct {
                         switch (prev_pending) {
                             .none => unreachable,
                             .ms => {
-                                const pair = surroundPair(@intCast(@intFromEnum(key)));
+                                const pair = cursor_mod.surroundPair(@intCast(@intFromEnum(key)));
                                 var it = cs.reverseIter(&self.cursor_pool);
                                 while (it.next()) |c| {
                                     const s = c.start();
@@ -1081,7 +847,7 @@ pub const Editor = struct {
                                 const ch: u8 = @intCast(@intFromEnum(key));
                                 var it = cs.reverseIter(&self.cursor_pool);
                                 while (it.next()) |c| {
-                                    if (surroundBounds(content, c.head, ch)) |b| {
+                                    if (cursor_mod.surroundBounds(content, c.head, ch)) |b| {
                                         self.bufferDelete(win.buffer_id, b.end, 1);
                                         self.bufferDelete(win.buffer_id, b.start, 1);
                                         c.head = b.start;
@@ -1094,10 +860,10 @@ pub const Editor = struct {
                             },
                             .mr2 => |char1| {
                                 const char2: u8 = @intCast(@intFromEnum(key));
-                                const pair2 = surroundPair(char2);
+                                const pair2 = cursor_mod.surroundPair(char2);
                                 var it = cs.reverseIter(&self.cursor_pool);
                                 while (it.next()) |c| {
-                                    if (surroundBounds(content, c.head, char1)) |b| {
+                                    if (cursor_mod.surroundBounds(content, c.head, char1)) |b| {
                                         self.bufferDelete(win.buffer_id, b.end, 1);
                                         self.bufferInsert(win.buffer_id, b.end, &[_]u8{pair2.close}) catch {};
                                         self.bufferDelete(win.buffer_id, b.start, 1);
@@ -1109,7 +875,7 @@ pub const Editor = struct {
                                 const ch: u8 = @intCast(@intFromEnum(key));
                                 var it = cs.reverseIter(&self.cursor_pool);
                                 while (it.next()) |c| {
-                                    const prev = cursorLeft(content, c.head);
+                                    const prev = cursor_mod.cursorLeft(content, c.head);
                                     if (prev < c.head) {
                                         self.bufferDelete(win.buffer_id, prev, c.head - prev);
                                         self.bufferInsert(win.buffer_id, prev, &[_]u8{ch}) catch {};
@@ -1120,7 +886,7 @@ pub const Editor = struct {
                                 const ch: u8 = @intCast(@intFromEnum(key));
                                 var it = cs.reverseIter(&self.cursor_pool);
                                 while (it.next()) |c| {
-                                    const next = cursorRight(content, c.head);
+                                    const next = cursor_mod.cursorRight(content, c.head);
                                     if (next > c.head) {
                                         self.bufferInsert(win.buffer_id, next, &[_]u8{ch}) catch {};
                                         self.bufferDelete(win.buffer_id, c.head, next - c.head);
@@ -1146,7 +912,7 @@ pub const Editor = struct {
                                         const ls = grapheme.lineStart(content, c.head);
                                         const col_px = win.preferred_col orelse platform.measureText(content[ls..c.head], win.font_size);
                                         win.preferred_col = col_px;
-                                        c.head = closestPosToX(content, 0, first_line_end, col_px, win.font_size);
+                                        c.head = cursor_mod.closestPosToX(content, 0, first_line_end, col_px, win.font_size);
                                         c.anchor = c.head;
                                     }
                                     keep_preferred_col = true;
@@ -1160,7 +926,7 @@ pub const Editor = struct {
                                         const ls = grapheme.lineStart(content, c.head);
                                         const col_px = win.preferred_col orelse platform.measureText(content[ls..c.head], win.font_size);
                                         win.preferred_col = col_px;
-                                        c.head = closestPosToX(content, last_ls, content.len, col_px, win.font_size);
+                                        c.head = cursor_mod.closestPosToX(content, last_ls, content.len, col_px, win.font_size);
                                         c.anchor = c.head;
                                     }
                                     keep_preferred_col = true;
@@ -1173,7 +939,7 @@ pub const Editor = struct {
                             'a' => switch (@intFromEnum(key)) {
                                 'w' => {
                                     for (cs.iter(&self.cursor_pool)) |*c| {
-                                        if (wordBoundsAt(content, c.head)) |wb| {
+                                        if (cursor_mod.wordBoundsAt(content, c.head)) |wb| {
                                             c.anchor = wb.start;
                                             c.head = wb.end;
                                         }
@@ -1181,7 +947,7 @@ pub const Editor = struct {
                                 },
                                 '\'' => {
                                     for (cs.iter(&self.cursor_pool)) |*c| {
-                                        if (quoteBounds(content, c.head, '\'')) |qb| {
+                                        if (cursor_mod.quoteBounds(content, c.head, '\'')) |qb| {
                                             c.anchor = qb.start + 1;
                                             c.head = qb.end;
                                         }
@@ -1189,7 +955,7 @@ pub const Editor = struct {
                                 },
                                 '(', ')' => {
                                     for (cs.iter(&self.cursor_pool)) |*c| {
-                                        if (parenBounds(content, c.head, '(', ')')) |pb| {
+                                        if (cursor_mod.parenBounds(content, c.head, '(', ')')) |pb| {
                                             c.anchor = pb.start + 1;
                                             c.head = pb.end;
                                         }
@@ -1229,7 +995,7 @@ pub const Editor = struct {
                             'A' => switch (@intFromEnum(key)) {
                                 '\'' => {
                                     for (cs.iter(&self.cursor_pool)) |*c| {
-                                        if (quoteBounds(content, c.head, '\'')) |qb| {
+                                        if (cursor_mod.quoteBounds(content, c.head, '\'')) |qb| {
                                             c.anchor = qb.start;
                                             c.head = qb.end + 1;
                                         }
@@ -1271,7 +1037,7 @@ pub const Editor = struct {
                                     const col_px = win.preferred_col orelse platform.measureText(content[ls..items[0].head], win.font_size);
                                     win.preferred_col = col_px;
                                     for (items) |*c| {
-                                        c.head = cursorDown(content, c.head, col_px, win.font_size);
+                                        c.head = cursor_mod.cursorDown(content, c.head, col_px, win.font_size);
                                     }
                                     keep_preferred_col = true;
                                 },
@@ -1281,7 +1047,7 @@ pub const Editor = struct {
                                     const col_px = win.preferred_col orelse platform.measureText(content[ls..items[0].head], win.font_size);
                                     win.preferred_col = col_px;
                                     for (items) |*c| {
-                                        c.head = cursorUp(content, c.head, col_px, win.font_size);
+                                        c.head = cursor_mod.cursorUp(content, c.head, col_px, win.font_size);
                                     }
                                     keep_preferred_col = true;
                                 },
@@ -1405,7 +1171,7 @@ pub const Editor = struct {
                         const ls = grapheme.lineStart(content, last.head);
                         const col_px = win.preferred_col orelse platform.measureText(content[ls..last.head], win.font_size);
                         win.preferred_col = col_px;
-                        const new_head = cursorDown(content, last.head, col_px, win.font_size);
+                        const new_head = cursor_mod.cursorDown(content, last.head, col_px, win.font_size);
                         if (new_head != last.head) {
                             cs.insert(&self.cursor_pool, .{ .head = new_head, .anchor = new_head }) catch {};
                         }
@@ -1419,7 +1185,7 @@ pub const Editor = struct {
                         const ls = grapheme.lineStart(content, first.head);
                         const col_px = win.preferred_col orelse platform.measureText(content[ls..first.head], win.font_size);
                         win.preferred_col = col_px;
-                        const new_head = cursorUp(content, first.head, col_px, win.font_size);
+                        const new_head = cursor_mod.cursorUp(content, first.head, col_px, win.font_size);
                         if (new_head != first.head) {
                             cs.insert(&self.cursor_pool, .{ .head = new_head, .anchor = new_head }) catch {};
                         }
@@ -1462,7 +1228,7 @@ pub const Editor = struct {
                         const buf = self.bufOf(win.buffer_id);
                         const content = buf.bytes();
                         for (cs.iter(&self.cursor_pool)) |*c| {
-                            c.head = wordNext(content, c.head);
+                            c.head = cursor_mod.wordNext(content, c.head);
                             c.anchor = c.head;
                         }
                     },
@@ -1470,14 +1236,14 @@ pub const Editor = struct {
                         const buf = self.bufOf(win.buffer_id);
                         const content = buf.bytes();
                         for (cs.iter(&self.cursor_pool)) |*c| {
-                            c.head = wordNext(content, c.head);
+                            c.head = cursor_mod.wordNext(content, c.head);
                         }
                     },
                     'b' => {
                         const buf = self.bufOf(win.buffer_id);
                         const content = buf.bytes();
                         for (cs.iter(&self.cursor_pool)) |*c| {
-                            c.head = wordPrev(content, c.head);
+                            c.head = cursor_mod.wordPrev(content, c.head);
                             c.anchor = c.head;
                         }
                     },
@@ -1485,7 +1251,7 @@ pub const Editor = struct {
                         const buf = self.bufOf(win.buffer_id);
                         const content = buf.bytes();
                         for (cs.iter(&self.cursor_pool)) |*c| {
-                            c.head = wordPrev(content, c.head);
+                            c.head = cursor_mod.wordPrev(content, c.head);
                         }
                     },
                     'i' => {
@@ -1542,7 +1308,7 @@ pub const Editor = struct {
                             const c0 = cs.iter(&self.cursor_pool)[0];
                             const term: ?[]const u8 = if (c0.isSelection())
                                 content[c0.start()..c0.end()]
-                            else if (wordBoundsAt(content, c0.head)) |wb|
+                            else if (cursor_mod.wordBoundsAt(content, c0.head)) |wb|
                                 content[wb.start..wb.end]
                             else
                                 null;
@@ -1653,8 +1419,8 @@ pub const Editor = struct {
                         const content = buf.bytes();
                         var it = cs.reverseIter(&self.cursor_pool);
                         while (it.next()) |c| {
-                            const prev = cursorLeft(content, c.head);
-                            const next = cursorRight(content, c.head);
+                            const prev = cursor_mod.cursorLeft(content, c.head);
+                            const next = cursor_mod.cursorRight(content, c.head);
                             if (prev < c.head and next > c.head) {
                                 const left_len = c.head - prev;
                                 const right_len = next - c.head;
@@ -1665,7 +1431,7 @@ pub const Editor = struct {
                                 self.bufferDelete(win.buffer_id, prev, left_len + right_len);
                                 self.bufferInsert(win.buffer_id, prev, right_copy[0..right_len]) catch {};
                                 self.bufferInsert(win.buffer_id, prev + right_len, left_copy[0..left_len]) catch {};
-                                c.head = cursorLeft(content, c.head);
+                                c.head = cursor_mod.cursorLeft(content, c.head);
                                 c.anchor = c.head;
                             }
                         }
@@ -1676,18 +1442,18 @@ pub const Editor = struct {
                         var it = cs.reverseIter(&self.cursor_pool);
                         while (it.next()) |c| {
                             // Find left word end, then start
-                            if (c.head == 0 or (isWordChar(content[c.head]) and isWordChar(content[c.head-1]))) continue;
+                            if (c.head == 0 or (cursor_mod.isWordChar(content[c.head]) and cursor_mod.isWordChar(content[c.head-1]))) continue;
                             var lend = c.head;
-                            while (lend > 0 and !isWordChar(content[lend - 1])) lend -= 1;
+                            while (lend > 0 and !cursor_mod.isWordChar(content[lend - 1])) lend -= 1;
                             if (lend == 0) continue;
                             var lstart = lend;
-                            while (lstart > 0 and isWordChar(content[lstart - 1])) lstart -= 1;
+                            while (lstart > 0 and cursor_mod.isWordChar(content[lstart - 1])) lstart -= 1;
                             // Find right word start, then end
                             var rstart = c.head;
-                            while (rstart < content.len and !isWordChar(content[rstart])) rstart += 1;
+                            while (rstart < content.len and !cursor_mod.isWordChar(content[rstart])) rstart += 1;
                             if (rstart >= content.len) continue;
                             var rend = rstart + 1;
-                            while (rend < content.len and isWordChar(content[rend])) rend += 1;
+                            while (rend < content.len and cursor_mod.isWordChar(content[rend])) rend += 1;
                             // Words must not overlap
                             if (lend > rstart) continue;
                             const lword_len = lend - lstart;
@@ -1753,7 +1519,7 @@ pub const Editor = struct {
                     const content = buf.bytes();
                     var it = cs.reverseIter(&self.cursor_pool);
                     while (it.next()) |cursor| {
-                        const prev = wordPrev(content, cursor.head);
+                        const prev = cursor_mod.wordPrev(content, cursor.head);
                         if (prev < cursor.head)
                             self.bufferDelete(win.buffer_id, prev, cursor.head - prev);
                     }

@@ -69,3 +69,41 @@ pub const Palette = struct {
         self.matches.deinit(allocator);
     }
 };
+
+// ── Match helpers ──────────────────────────────────────────────────────────
+
+/// First match with start >= from; wraps to first if none found.
+pub fn findNextMatchFrom(matches: []const Match, from: usize) ?Match {
+    for (matches) |m| if (m.start >= from) return m;
+    if (matches.len > 0) return matches[0];
+    return null;
+}
+
+/// Last match with end <= from; wraps to last if none found.
+pub fn findPrevMatchFrom(matches: []const Match, from: usize) ?Match {
+    var i = matches.len;
+    while (i > 0) {
+        i -= 1;
+        if (matches[i].end <= from) return matches[i];
+    }
+    if (matches.len > 0) return matches[matches.len - 1];
+    return null;
+}
+
+// ── Settings palette items ─────────────────────────────────────────────────
+
+pub const SETTINGS_ITEMS = [_]PickerItem{
+    .{ .label = "Tab Width", .op_on_confirm = .tab_width_palette },
+    .{ .label = "Language",  .op_on_confirm = .language_palette },
+};
+
+pub const TAB_WIDTH_ITEMS = [_]PickerItem{
+    .{ .label = "2", .op_on_confirm = .{ .set_tab_width = 2 } },
+    .{ .label = "4", .op_on_confirm = .{ .set_tab_width = 4 } },
+    .{ .label = "8", .op_on_confirm = .{ .set_tab_width = 8 } },
+};
+
+pub const LANGUAGE_ITEMS = [_]PickerItem{
+    .{ .label = "Zig",  .op_on_confirm = .{ .set_language = .zig } },
+    .{ .label = "None", .op_on_confirm = .{ .set_language = .none } },
+};
