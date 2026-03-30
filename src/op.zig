@@ -1,3 +1,5 @@
+pub const Language = enum { zig, none };
+
 pub const Op = union(enum) {
     search_forward: ?[]const u8,
     search_backward: ?[]const u8,
@@ -7,6 +9,11 @@ pub const Op = union(enum) {
     filter_drop: ?[]const u8,
     preview: PreviewPayload,
     cancel_palette,
+    settings_palette,
+    tab_width_palette,
+    language_palette,
+    set_tab_width: u8,
+    set_language: Language,
 
     pub const PreviewPayload = struct {
         intent: PaletteOpKind,
@@ -20,5 +27,8 @@ pub const Op = union(enum) {
         split_selections_complement,
         filter_keep,
         filter_drop,
+        settings_palette,
+        tab_width_palette,
+        language_palette,
     };
 };

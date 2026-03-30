@@ -14,12 +14,18 @@ pub const PreviewKind = enum {
     none,
 };
 
+pub const PickerItem = struct {
+    label: []const u8,
+    op_on_confirm: Op,
+};
+
 pub const PaletteConfig = struct {
     prompt_symbol: []const u8,
     op_kind: Op.PaletteOpKind,
     require_selection: bool = false,
     prepopulate_selection: bool = true,
     preview: PreviewKind = .none,
+    picker_items: []const PickerItem = &.{},
 };
 
 pub const Palette = struct {
@@ -37,6 +43,9 @@ pub const Palette = struct {
     /// Must not be stack-allocated — DrawList stores raw slices that are
     /// rendered after the drawPalette stack frame is gone.
     count_buf: [32]u8 = undefined,
+    /// Picker items and selected index within the filtered list.
+    picker_items: []const PickerItem = &.{},
+    picker_selected: usize = 0,
 
     pub fn init(buffer_id: BufferId, cursor_set_id: CursorSetId) Palette {
         return .{

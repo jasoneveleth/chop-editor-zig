@@ -17,6 +17,7 @@ const MOD_ALT = @import("key.zig").MOD_ALT;
 const Palette = @import("palette.zig").Palette;
 const Match = @import("palette.zig").Match;
 const PaletteConfig = @import("palette.zig").PaletteConfig;
+const PickerItem = @import("palette.zig").PickerItem;
 const Op = @import("op.zig").Op;
 const OpQueue = @import("op_queue.zig").OpQueue;
 const platform = @import("platform/web.zig");
@@ -66,6 +67,24 @@ const FILLER_TEXT =
     \\    return v - len;
     \\}
 ;
+
+// ── Settings palette items ─────────────────────────────────────────────────
+
+const SETTINGS_ITEMS = [_]PickerItem{
+    .{ .label = "Tab Width", .op_on_confirm = .tab_width_palette },
+    .{ .label = "Language",  .op_on_confirm = .language_palette },
+};
+
+const TAB_WIDTH_ITEMS = [_]PickerItem{
+    .{ .label = "2", .op_on_confirm = .{ .set_tab_width = 2 } },
+    .{ .label = "4", .op_on_confirm = .{ .set_tab_width = 4 } },
+    .{ .label = "8", .op_on_confirm = .{ .set_tab_width = 8 } },
+};
+
+const LANGUAGE_ITEMS = [_]PickerItem{
+    .{ .label = "Zig",  .op_on_confirm = .{ .set_language = .zig } },
+    .{ .label = "None", .op_on_confirm = .{ .set_language = .none } },
+};
 
 // ── Cursor movement helpers ────────────────────────────────────────────────
 
@@ -288,6 +307,7 @@ pub const Editor = struct {
     undo_stack: UndoStack = .{},
     highlighters: std.ArrayList(Highlighter),
     op_queue: OpQueue = .{},
+    tab_width: u8 = 4,
 
     pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, dark_mode: bool) !Editor {
         var editor = Editor{
@@ -430,6 +450,8 @@ pub const Editor = struct {
         if (config.require_selection and !cs.hasSelection(&self.cursor_pool)) return;
 
         self.palette.active = config;
+        self.palette.picker_items = config.picker_items;
+        self.palette.picker_selected = 0;
         const snap_start = self.cursor_pool.snapshotRange(self.allocator, cs.start, cs.len) catch cs.start;
         self.palette.saved_cursors = .{ .buffer_id = cs.buffer_id, .start = snap_start, .len = cs.len };
 
@@ -561,15 +583,28 @@ pub const Editor = struct {
         if (confirm) {
             const pal_buf = self.getBuffer(self.palette.buffer_id) orelse return;
             const text = pal_buf.bytes();
-            const completed_op: Op = switch (config.op_kind) {
-                .search_forward              => .{ .search_forward = text },
-                .search_backward             => .{ .search_backward = text },
-                .split_selections            => .{ .split_selections = text },
-                .split_selections_complement => .{ .split_selections_complement = text },
-                .filter_keep                 => .{ .filter_keep = text },
-                .filter_drop                 => .{ .filter_drop = text },
-            };
-            self.op_queue.push(self.allocator, completed_op);
+            switch (config.op_kind) {
+                .search_forward              => self.op_queue.push(self.allocator, .{ .search_forward = text }),
+                .search_backward             => self.op_queue.push(self.allocator, .{ .search_backward = text }),
+                .split_selections            => self.op_queue.push(self.allocator, .{ .split_selections = text }),
+                .split_selections_complement => self.op_queue.push(self.allocator, .{ .split_selections_complement = text }),
+                .filter_keep                 => self.op_queue.push(self.allocator, .{ .filter_keep = text }),
+                .filter_drop                 => self.op_queue.push(self.allocator, .{ .filter_drop = text }),
+                .settings_palette,
+                .tab_width_palette,
+                .language_palette => {
+                    // Find the picker_selected-th item that matches the current filter.
+                    var visible: usize = 0;
+                    for (self.palette.picker_items) |item| {
+                        if (text.len > 0 and std.mem.indexOf(u8, item.label, text) == null) continue;
+                        if (visible == self.palette.picker_selected) {
+                            self.op_queue.push(self.allocator, item.op_on_confirm);
+                            break;
+                        }
+                        visible += 1;
+                    }
+                },
+            }
         } else {
             cs.restoreFrom(&self.cursor_pool, self.palette.saved_cursors.start, self.palette.saved_cursors.len);
             self.palette.matches.clearRetainingCapacity();
@@ -694,6 +729,42 @@ pub const Editor = struct {
             .cancel_palette => {
                 self.palette.matches.clearRetainingCapacity();
             },
+            .settings_palette => {
+                self.openPalette(.{
+                    .prompt_symbol = ":",
+                    .op_kind = .settings_palette,
+                    .prepopulate_selection = false,
+                    .picker_items = &SETTINGS_ITEMS,
+                }) catch {};
+            },
+            .tab_width_palette => {
+                self.openPalette(.{
+                    .prompt_symbol = "tab:",
+                    .op_kind = .tab_width_palette,
+                    .prepopulate_selection = false,
+                    .picker_items = &TAB_WIDTH_ITEMS,
+                }) catch {};
+            },
+            .language_palette => {
+                self.openPalette(.{
+                    .prompt_symbol = "lang:",
+                    .op_kind = .language_palette,
+                    .prepopulate_selection = false,
+                    .picker_items = &LANGUAGE_ITEMS,
+                }) catch {};
+            },
+            .set_tab_width => |width| {
+                self.tab_width = width;
+            },
+            .set_language => |lang| {
+                const win = self.getWindow(self.focused_window) orelse return;
+                const h = &self.highlighters.items[win.buffer_id.index];
+                h.setLanguage(lang);
+                if (lang == .zig) {
+                    const buf = self.getBuffer(win.buffer_id) orelse return;
+                    h.rehighlight(buf.bytes()) catch {};
+                }
+            },
         }
     }
 
@@ -714,54 +785,76 @@ pub const Editor = struct {
     }
 
     fn drawPalette(self: *Editor, dl: *draw.DrawList, win: *const Window, dark_mode: bool) !void {
+        if (self.palette.active == null) return;
         const font_size: f32 = 14;
         const line_height = font_size * 1.4;
+        const input_row_h: f32 = line_height * 1.5;
+        const item_row_h: f32  = line_height * 1.4;
 
         const pal_w: f32 = @min(600, @max(win.width - 80, 800));
-        const pal_h: f32 = line_height * 1.5;
         const pal_x: f32 = (win.width - pal_w) / 2;
         const pal_y: f32 = 24;
-        const baseline = pal_y + pal_h / 2 + font_size / 3;
         const text_x = pal_x + 14;
 
-        const pal_bg = if (dark_mode) draw.Color.rgb(45, 45, 45) else draw.Color.rgb(220, 220, 220);
-        const pal_dim = if (dark_mode) draw.Color.rgb(100, 100, 100) else draw.Color.rgb(130, 130, 130);
+        const pal_bg   = if (dark_mode) draw.Color.rgb(45, 45, 45)   else draw.Color.rgb(220, 220, 220);
+        const pal_dim  = if (dark_mode) draw.Color.rgb(100, 100, 100) else draw.Color.rgb(130, 130, 130);
         const pal_text = if (dark_mode) draw.Color.rgb(220, 220, 220) else draw.Color.rgb(27, 27, 27);
+        const sel_bg   = if (dark_mode) draw.Color.rgb(55, 75, 115)   else draw.Color.rgb(180, 200, 240);
 
-        // Box background.
-        try dl.fillRect(
-            .{ .x = pal_x, .y = pal_y, .w = pal_w, .h = pal_h },
-            pal_bg,
-        );
+        // Pattern text (drives both display and picker filtering).
+        const pal_buf = self.getBuffer(self.palette.buffer_id) orelse return;
+        const pattern = pal_buf.bytes();
 
-        // "/" or "?" prompt.
+        // Compute filtered picker items (indices into picker_items, max 32).
+        var filtered_buf: [32]usize = undefined;
+        var filtered_len: usize = 0;
+        for (self.palette.picker_items, 0..) |item, i| {
+            if (pattern.len == 0 or std.mem.indexOf(u8, item.label, pattern) != null) {
+                filtered_buf[filtered_len] = i;
+                filtered_len += 1;
+                if (filtered_len >= filtered_buf.len) break;
+            }
+        }
+        const filtered = filtered_buf[0..filtered_len];
+
+        // Total height: input row + item rows.
+        const pal_h = input_row_h + item_row_h * @as(f32, @floatFromInt(filtered_len));
+        try dl.fillRect(.{ .x = pal_x, .y = pal_y, .w = pal_w, .h = pal_h }, pal_bg);
+
+        // ── Text input row ──────────────────────────────────────────────────
+        const baseline = pal_y + input_row_h / 2 + font_size / 3;
         const prompt = self.palette.promptSymbol();
         const prompt_w = platform.measureText(prompt, font_size);
         try dl.drawText(text_x, baseline, prompt, pal_dim, font_size);
 
-        // Pattern text.
-        const pal_buf = self.getBuffer(self.palette.buffer_id) orelse return;
-        const pattern = pal_buf.bytes();
         const pat_x = text_x + prompt_w + 6;
         try dl.drawText(pat_x, baseline, pattern, pal_text, font_size);
 
-        // Match count hint.
+        // Match count hint (text palettes).
         if (self.palette.matches.items.len > 0) {
             const count_str = std.fmt.bufPrint(&self.palette.count_buf, "{d} matches", .{self.palette.matches.items.len}) catch "";
             const count_x = pal_x + pal_w - platform.measureText(count_str, font_size) - 14;
             try dl.drawText(count_x, baseline, count_str, pal_dim, font_size);
         }
 
-        // Palette cursor.
+        // Text cursor.
         const pal_cs = self.getCursorSet(self.palette.cursor_set_id) orelse return;
         if (pal_cs.len > 0) {
             const cur_head = pal_cs.iter(&self.cursor_pool)[0].head;
             const cx = pat_x + platform.measureText(pattern[0..cur_head], font_size);
-            const cur_y = pal_y + (pal_h - line_height) / 2;
-            try dl.fillRect(
-                .{ .x = cx - 1, .y = cur_y, .w = 2, .h = line_height },
-                draw.Color.rgb(0, 196, 255),
-            );
+            const cur_y = pal_y + (input_row_h - line_height) / 2;
+            try dl.fillRect(.{ .x = cx - 1, .y = cur_y, .w = 2, .h = line_height }, draw.Color.rgb(0, 196, 255));
+        }
+
+        // ── Filtered picker items ───────────────────────────────────────────
+        for (filtered, 0..) |item_idx, fi| {
+            const item = self.palette.picker_items[item_idx];
+            const item_y = pal_y + input_row_h + @as(f32, @floatFromInt(fi)) * item_row_h;
+            if (fi == self.palette.picker_selected) {
+                try dl.fillRect(.{ .x = pal_x + 2, .y = item_y, .w = pal_w - 4, .h = item_row_h }, sel_bg);
+            }
+            const item_baseline = item_y + item_row_h / 2 + font_size / 3;
+            try dl.drawText(text_x, item_baseline, item.label, pal_text, font_size);
         }
     }
 
@@ -1614,7 +1707,8 @@ pub const Editor = struct {
                         }
                     },
                     ';' => { for (cs.iter(&self.cursor_pool)) |*c| { c.anchor = c.head; } }, // cv: collapse selections
-                    ':' => { if (cs.len > 1) cs.len = 1; }, // cd: drop to single cursor
+                    ':' => { if (cs.len > 1) cs.len = 1; }, // drop to single cursor
+                    ' ' => self.op_queue.push(self.allocator, .settings_palette),
                     'g', 'C', 'a', 'A', '"' => { win.pending = .{ .prefix = @intCast(@intFromEnum(key)) }; },
                     'c' => self.cut(win, cs),
                     'm' => { win.pending = .{ .prefix = 'm' }; },
@@ -1647,7 +1741,8 @@ pub const Editor = struct {
                 },
                 .tab => {
                     win.preferred_col = null;
-                    self.insertAtCursors(win, cs, "    ");
+                    const spaces = "        "[0..self.tab_width];
+                    self.insertAtCursors(win, cs, spaces);
                 },
                 else => if (key.isPrintable() and mods & MOD_CTRL != 0 and @intFromEnum(key) == 'y') {
                     win.preferred_col = null;
@@ -1678,6 +1773,7 @@ pub const Editor = struct {
                     .backspace => {
                         if (pal_cs.len > 0 and pal_cs.iter(&self.cursor_pool)[0].head > 0) {
                             self.bufferDelete(self.palette.buffer_id, pal_cs.iter(&self.cursor_pool)[0].head - 1, 1);
+                            self.palette.picker_selected = 0;
                             if (self.palette.active) |config| {
                                 if (config.preview == .search_highlights) {
                                     const pal_buf = self.getBuffer(self.palette.buffer_id) orelse return;
@@ -1688,6 +1784,22 @@ pub const Editor = struct {
                                 }
                             }
                         }
+                    },
+                    .arrow_up => {
+                        if (self.palette.picker_selected > 0)
+                            self.palette.picker_selected -= 1;
+                    },
+                    .arrow_down => {
+                        // Count how many items pass the current filter.
+                        const pal_buf_d = self.getBuffer(self.palette.buffer_id) orelse return;
+                        const pat_d = pal_buf_d.bytes();
+                        var filtered_count: usize = 0;
+                        for (self.palette.picker_items) |item| {
+                            if (pat_d.len == 0 or std.mem.indexOf(u8, item.label, pat_d) != null)
+                                filtered_count += 1;
+                        }
+                        if (filtered_count > 0 and self.palette.picker_selected + 1 < filtered_count)
+                            self.palette.picker_selected += 1;
                     },
                     .arrow_left => {
                         if (pal_cs.len > 0 and pal_cs.iter(&self.cursor_pool)[0].head > 0) {
@@ -1708,6 +1820,7 @@ pub const Editor = struct {
                         const byte_len = std.unicode.utf8Encode(cp, &encoded) catch return;
                         if (pal_cs.len > 0) {
                             self.bufferInsert(self.palette.buffer_id, pal_cs.iter(&self.cursor_pool)[0].head, encoded[0..byte_len]) catch return;
+                            self.palette.picker_selected = 0;
                             if (self.palette.active) |config| {
                                 if (config.preview == .search_highlights) {
                                     const pal_buf = self.getBuffer(self.palette.buffer_id) orelse return;

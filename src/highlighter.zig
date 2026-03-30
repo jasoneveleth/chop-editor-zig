@@ -7,6 +7,7 @@
 const std = @import("std");
 const BufferId = @import("buffer.zig").BufferId;
 const highlight = @import("highlight.zig");
+pub const Language = @import("op.zig").Language;
 
 // ── Tree-sitter C API ─────────────────────────────────────────────────────────
 
@@ -162,6 +163,7 @@ pub const Highlighter = struct {
     parser:    *TSParser,
     tree:      ?*TSTree,
     spans:     std.ArrayList(highlight.Span),
+    language:  Language = .zig,
 
     pub fn init(allocator: std.mem.Allocator, buffer_id: BufferId) !Highlighter {
         const parser = ts_parser_new() orelse return error.TSParserAllocFailed;
@@ -181,8 +183,20 @@ pub const Highlighter = struct {
         self.spans.deinit(self.allocator);
     }
 
+    pub fn setLanguage(self: *Highlighter, lang: Language) void {
+        self.language = lang;
+        if (lang == .none) {
+            if (self.tree) |t| {
+                ts_tree_delete(t);
+                self.tree = null;
+            }
+            self.spans.clearRetainingCapacity();
+        }
+    }
+
     /// Re-parse `source` and rebuild the span list.
     pub fn rehighlight(self: *Highlighter, source: []const u8) !void {
+        if (self.language == .none) return;
         if (self.tree) |t| ts_tree_delete(t);
         self.tree = ts_parser_parse_string(
             self.parser,
