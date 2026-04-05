@@ -29,8 +29,6 @@ const Op = @import("op.zig").Op;
 const OpQueue = @import("op_queue.zig").OpQueue;
 const platform = @import("platform/web.zig");
 const grapheme = @import("grapheme.zig");
-const undo_mod = @import("undo.zig");
-const UndoStack = undo_mod.UndoHistory;
 const Highlighter = @import("highlighter.zig").Highlighter;
 const FILLER_TEXT = @import("filler.zig").FILLER_TEXT;
 
@@ -70,7 +68,6 @@ pub const Editor = struct {
     last_input_ms: f64 = 0,
     dark_mode: bool = true,
     drag_anchor: ?usize = null,
-    undo_stack: UndoStack = .{},
     highlighters: std.ArrayList(Highlighter),
     op_queue: OpQueue = .{},
     tab_width: u8 = 4,
@@ -107,7 +104,6 @@ pub const Editor = struct {
     }
 
     pub fn deinit(self: *Editor) void {
-        self.undo_stack.deinit(self.allocator);
         self.palette.deinit(self.allocator);
         var it = self.buffer_cursor_sets.valueIterator();
         while (it.next()) |list| list.deinit(self.allocator);
@@ -181,7 +177,7 @@ pub const Editor = struct {
         }
         if (@as(u32, @bitCast(buffer_id)) != @as(u32, @bitCast(self.palette.buffer_id))) {
             self.palette.matches_stale = true;
-            self.undo_stack.recordInsert(self.allocator, pos, text);
+            buf.history.recordInsert(self.allocator, pos, text);
             self.highlighters.items[buffer_id.index].rehighlight(buf.bytes()) catch {};
         }
     }
@@ -190,8 +186,8 @@ pub const Editor = struct {
     pub fn bufferDelete(self: *Editor, buffer_id: BufferId, pos: usize, len: usize) void {
         const buf = self.getBuffer(buffer_id) orelse return;
         if (@as(u32, @bitCast(buffer_id)) != @as(u32, @bitCast(self.palette.buffer_id))) {
-            const end = @min(pos + len, buf.content.items.len);
-            self.undo_stack.recordDelete(self.allocator, pos, buf.content.items[pos..end]);
+            const end = @min(pos + len, buf.len());
+            buf.history.recordDelete(self.allocator, pos, buf.slice(pos, end));
         }
         buf.delete(pos, len) catch {};
         const key: u32 = @bitCast(buffer_id);
@@ -637,7 +633,7 @@ pub const Editor = struct {
             const items = cs.iter(&self.cursor_pool);
             const pos = items[idx].head;
             buf_obj.insert(pos, text) catch continue;
-            self.undo_stack.recordInsert(self.allocator, pos, text);
+            buf_obj.history.recordInsert(self.allocator, pos, text);
             items[idx].head = pos + (idx + 1) * text.len;
             items[idx].anchor = items[idx].head;
         }
@@ -758,7 +754,7 @@ pub const Editor = struct {
 
     fn applyUndo(self: *Editor, win: *Window, cs: *CursorSet) void {
         const buf = self.bufOf(win.buffer_id);
-        self.undo_stack.undo(buf, cs, &self.cursor_pool);
+        buf.undo(cs, &self.cursor_pool);
         win.preferred_col = null;
         self.palette.matches_stale = true;
         self.highlighters.items[win.buffer_id.index].rehighlight(buf.bytes()) catch {};
@@ -766,7 +762,7 @@ pub const Editor = struct {
 
     fn applyRedo(self: *Editor, win: *Window, cs: *CursorSet) void {
         const buf = self.bufOf(win.buffer_id);
-        self.undo_stack.redo(buf, cs, &self.cursor_pool);
+        buf.redo(cs, &self.cursor_pool);
         win.preferred_col = null;
         self.palette.matches_stale = true;
         self.highlighters.items[win.buffer_id.index].rehighlight(buf.bytes()) catch {};
@@ -774,7 +770,7 @@ pub const Editor = struct {
 
     fn applyUndoOlder(self: *Editor, win: *Window, cs: *CursorSet) void {
         const buf = self.bufOf(win.buffer_id);
-        self.undo_stack.undoOlder(buf, cs, &self.cursor_pool);
+        buf.undoOlder(cs, &self.cursor_pool);
         win.preferred_col = null;
         self.palette.matches_stale = true;
         self.highlighters.items[win.buffer_id.index].rehighlight(buf.bytes()) catch {};
@@ -782,7 +778,7 @@ pub const Editor = struct {
 
     fn applyUndoNewer(self: *Editor, win: *Window, cs: *CursorSet) void {
         const buf = self.bufOf(win.buffer_id);
-        self.undo_stack.undoNewer(buf, cs, &self.cursor_pool);
+        buf.undoNewer(cs, &self.cursor_pool);
         win.preferred_col = null;
         self.palette.matches_stale = true;
         self.highlighters.items[win.buffer_id.index].rehighlight(buf.bytes()) catch {};
@@ -794,8 +790,9 @@ pub const Editor = struct {
         const cs = self.getCursorSet(win.cursor_set_id) orelse return;
         switch (win.mode) {
             .normal => {
-                self.undo_stack.begin(self.allocator, cs, &self.cursor_pool);
-                defer if (win.mode != .insert) self.undo_stack.commit(self.allocator);
+                const normal_buf = self.bufOf(win.buffer_id);
+                normal_buf.history.begin(self.allocator, cs, &self.cursor_pool);
+                defer if (win.mode != .insert) normal_buf.history.commit(self.allocator);
                 var keep_preferred_col = false;
                 defer if (!keep_preferred_col) { win.preferred_col = null; };
                 switch (key) {
@@ -1486,7 +1483,7 @@ pub const Editor = struct {
             },
             .insert => switch (key) {
                 .escape => {
-                    self.undo_stack.commit(self.allocator);
+                    self.bufOf(win.buffer_id).history.commit(self.allocator);
                     win.mode = .normal;
                 },
                 .arrow_left => self.move(win, cs, .left),
