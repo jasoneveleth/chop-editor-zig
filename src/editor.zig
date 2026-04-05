@@ -1160,33 +1160,48 @@ pub const Editor = struct {
                         }
                     },
                     'J' => {
-                        if (cs.len == 0) return;
-                        const buf = self.bufOf(win.buffer_id);
-                        const content = buf.bytes();
-                        const items = cs.iter(&self.cursor_pool);
-                        const last = items[cs.len - 1];
-                        const ls = grapheme.lineStart(content, last.head);
-                        const col_px = win.preferred_col orelse platform.measureText(content[ls..last.head], win.font_size);
-                        win.preferred_col = col_px;
-                        const new_head = cursor_mod.cursorDown(content, last.head, col_px, win.font_size);
-                        if (new_head != last.head) {
-                            cs.insert(&self.cursor_pool, .{ .head = new_head, .anchor = new_head }) catch {};
+                        if (mods & MOD_ALT != 0) {
+                            // Subtract bottom (last) cursor
+                            if (cs.len > 1) cs.len -= 1;
+                        } else {
+                            if (cs.len == 0) return;
+                            const buf = self.bufOf(win.buffer_id);
+                            const content = buf.bytes();
+                            const items = cs.iter(&self.cursor_pool);
+                            const last = items[cs.len - 1];
+                            const ls = grapheme.lineStart(content, last.head);
+                            const col_px = win.preferred_col orelse platform.measureText(content[ls..last.head], win.font_size);
+                            win.preferred_col = col_px;
+                            const new_head = cursor_mod.cursorDown(content, last.head, col_px, win.font_size);
+                            if (new_head != last.head) {
+                                cs.insert(&self.cursor_pool, .{ .head = new_head, .anchor = new_head }) catch {};
+                            }
+                            keep_preferred_col = true;
                         }
-                        keep_preferred_col = true;
                     },
                     'K' => {
-                        if (cs.len == 0) return;
-                        const buf = self.bufOf(win.buffer_id);
-                        const content = buf.bytes();
-                        const first = cs.iter(&self.cursor_pool)[0];
-                        const ls = grapheme.lineStart(content, first.head);
-                        const col_px = win.preferred_col orelse platform.measureText(content[ls..first.head], win.font_size);
-                        win.preferred_col = col_px;
-                        const new_head = cursor_mod.cursorUp(content, first.head, col_px, win.font_size);
-                        if (new_head != first.head) {
-                            cs.insert(&self.cursor_pool, .{ .head = new_head, .anchor = new_head }) catch {};
+                        if (mods & MOD_ALT != 0) {
+                            // Subtract top (first) cursor
+                            if (cs.len > 1) {
+                                const all = self.cursor_pool.slice(cs.start, cs.len);
+                                var i: u32 = 0;
+                                while (i < cs.len - 1) : (i += 1) all[i] = all[i + 1];
+                                cs.len -= 1;
+                            }
+                        } else {
+                            if (cs.len == 0) return;
+                            const buf = self.bufOf(win.buffer_id);
+                            const content = buf.bytes();
+                            const first = cs.iter(&self.cursor_pool)[0];
+                            const ls = grapheme.lineStart(content, first.head);
+                            const col_px = win.preferred_col orelse platform.measureText(content[ls..first.head], win.font_size);
+                            win.preferred_col = col_px;
+                            const new_head = cursor_mod.cursorUp(content, first.head, col_px, win.font_size);
+                            if (new_head != first.head) {
+                                cs.insert(&self.cursor_pool, .{ .head = new_head, .anchor = new_head }) catch {};
+                            }
+                            keep_preferred_col = true;
                         }
-                        keep_preferred_col = true;
                     },
                     'j' => {
                         if (mods & MOD_ALT != 0) {
