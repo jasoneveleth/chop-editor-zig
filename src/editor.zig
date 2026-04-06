@@ -1403,6 +1403,41 @@ pub const Editor = struct {
                     },
                     'y' => self.yank(win, cs),
                     'Y' => self.paste(win, cs),
+                    '&' => {
+                        if (cs.len == 0) return;
+                        const buf = self.bufOf(win.buffer_id);
+                        if (mods & MOD_ALT != 0) {
+                            // Duplicate before: insert a copy before each selection;
+                            // cursor auto-adjusts to stay on the original (now shifted) text.
+                            var it = cs.reverseIter(&self.cursor_pool);
+                            while (it.next()) |c| {
+                                if (!c.isSelection()) continue;
+                                const content = buf.bytes();
+                                const sel_start = c.start();
+                                const sel_end = c.end();
+                                const copy = self.allocator.dupe(u8, content[sel_start..sel_end]) catch continue;
+                                defer self.allocator.free(copy);
+                                self.bufferInsert(win.buffer_id, sel_start, copy) catch {};
+                            }
+                        } else {
+                            // Duplicate after: insert a copy after each selection;
+                            // restore cursor so it keeps selecting the original text.
+                            var it = cs.reverseIter(&self.cursor_pool);
+                            while (it.next()) |c| {
+                                if (!c.isSelection()) continue;
+                                const content = buf.bytes();
+                                const sel_start = c.start();
+                                const sel_end = c.end();
+                                const copy = self.allocator.dupe(u8, content[sel_start..sel_end]) catch continue;
+                                defer self.allocator.free(copy);
+                                const orig_head = c.head;
+                                const orig_anchor = c.anchor;
+                                self.bufferInsert(win.buffer_id, sel_end, copy) catch {};
+                                c.head = orig_head;
+                                c.anchor = orig_anchor;
+                            }
+                        }
+                    },
                     '\'' => {
                         const buf = self.bufOf(win.buffer_id);
                         const content = buf.bytes();
