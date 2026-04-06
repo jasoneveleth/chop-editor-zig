@@ -8,6 +8,8 @@ pub const Tag = enum(u8) {
     identifier,
     identifier_decl,   // identifier under var_decl / param_decl
     punctuation,
+    type_primitive,    // BuildinTypeExpr: usize, u8, bool, void, f32, etc.
+    fn_name,           // function declaration name or call site
 };
 
 pub const Span = struct {

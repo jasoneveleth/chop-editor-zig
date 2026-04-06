@@ -26,8 +26,10 @@ fn tagStyle(tag: highlight.Tag, scheme: Colorscheme) TagStyle {
             .number       => .{ .fg = draw.Color.rgb(209, 154,  99) },
             .builtin      => .{ .fg = draw.Color.rgb( 86, 182, 194) },
             .punctuation  => .{ .fg = draw.Color.rgb(150, 150, 150) },
-            .identifier   => .{ .fg = draw.Color.rgb(224, 108,  95) },
+            .identifier   => .{ .fg = draw.Color.rgb(224, 108, 117) },
             .identifier_decl => .{ .fg = draw.Color.rgb( 97, 175, 239) },
+            .type_primitive  => .{ .fg = draw.Color.rgb(215, 186, 127) },
+            .fn_name         => .{ .fg = draw.Color.rgb( 97, 175, 239) },
         },
         .alabaster => switch (tag) {
             .default      => .{ .fg = draw.Color.rgb( 27,  27,  27) },
@@ -39,6 +41,8 @@ fn tagStyle(tag: highlight.Tag, scheme: Colorscheme) TagStyle {
             .punctuation  => .{ .fg = draw.Color.rgb( 79,  79,  79) },
             .identifier   => .{ .fg = draw.Color.rgb( 27,  27,  27) },
             .identifier_decl => .{ .fg = draw.Color.rgb( 78,  18, 130), .bg = draw.Color.rgb(236, 224, 248) },
+            .type_primitive  => .{ .fg = draw.Color.rgb( 27,  27,  27) },
+            .fn_name         => .{ .fg = draw.Color.rgb( 27,  27,  27) },
         },
     };
 }
@@ -99,7 +103,7 @@ pub const Window = struct {
     // No deinit — Window owns no heap memory.
 
     pub fn buildDrawList(self: *Window, dl: *draw.DrawList, buf: *const Buffer, cs: *const CursorSet, pool: *const CursorPool, highlights: []const Match, spans: []const highlight.Span, cursor_visible: bool, scheme: Colorscheme) !void {
-        const bg_color   = switch (scheme) { .onedark => draw.Color.rgb(27, 27, 27),   .alabaster => draw.Color.rgb(247, 247, 247) };
+        const bg_color   = switch (scheme) { .onedark => draw.Color.rgb(41, 44, 51),   .alabaster => draw.Color.rgb(247, 247, 247) };
         const text_color = switch (scheme) { .onedark => draw.Color.rgb(204, 204, 204), .alabaster => draw.Color.rgb(27,  27,  27)  };
 
         // Background

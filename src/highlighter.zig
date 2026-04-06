@@ -58,51 +58,51 @@ extern fn tree_sitter_zig() *const TSLanguage;
 // Maps tree-sitter-zig node type strings to highlight tags.
 // Keywords appear as anonymous nodes whose .type IS the keyword text.
 const TAG_MAP = std.StaticStringMap(highlight.Tag).initComptime(.{
-    // Named node types (names from tree-sitter-zig's generated parser)
-    .{ "line_comment",          .comment },
-    .{ "container_doc_comment", .comment },
-    .{ "doc_comment",           .comment },
-    .{ "STRINGLITERALSINGLE",   .string  },
-    .{ "LINESTRING",            .string  },
-    .{ "CHAR_LITERAL",          .string  },
-    .{ "INTEGER",               .number  },
-    .{ "FLOAT",                 .number  },
-    .{ "BUILTINIDENTIFIER",     .builtin },
-    .{ "IDENTIFIER",            .identifier },
+    // Named node types
+    .{ "line_comment",          .comment        },
+    .{ "container_doc_comment", .comment        },
+    .{ "doc_comment",           .comment        },
+    .{ "STRINGLITERALSINGLE",   .string         },
+    .{ "LINESTRING",            .string         },
+    .{ "CHAR_LITERAL",          .string         },
+    .{ "INTEGER",               .number         },
+    .{ "FLOAT",                 .number         },
+    .{ "BUILTINIDENTIFIER",     .builtin        },
+    .{ "IDENTIFIER",            .identifier     },
+    // All primitive types (usize, u8, bool, void, f32, …) are BuildinTypeExpr tokens.
+    .{ "BuildinTypeExpr",       .type_primitive },
 
-    // Punctuation (anonymous nodes — type == literal character)
+    // Punctuation
     .{ "{", .punctuation }, .{ "}", .punctuation },
     .{ "(", .punctuation }, .{ ")", .punctuation },
     .{ "[", .punctuation }, .{ "]", .punctuation },
     .{ ";", .punctuation }, .{ ",", .punctuation },
     .{ ".", .punctuation },
 
-    // Keywords (anonymous nodes — type == keyword text)
-    .{ "fn",           .keyword }, .{ "pub",         .keyword },
-    .{ "const",        .keyword }, .{ "var",         .keyword },
-    .{ "if",           .keyword }, .{ "else",        .keyword },
-    .{ "while",        .keyword }, .{ "for",         .keyword },
-    .{ "return",       .keyword }, .{ "break",       .keyword },
-    .{ "continue",     .keyword }, .{ "switch",      .keyword },
-    .{ "struct",       .keyword }, .{ "enum",        .keyword },
-    .{ "union",        .keyword }, .{ "error",       .keyword },
-    .{ "try",          .keyword }, .{ "catch",       .keyword },
-    .{ "defer",        .keyword }, .{ "errdefer",    .keyword },
-    .{ "unreachable",  .keyword }, .{ "comptime",    .keyword },
-    .{ "inline",       .keyword }, .{ "extern",      .keyword },
-    .{ "packed",       .keyword }, .{ "export",      .keyword },
-    .{ "test",         .keyword }, .{ "usingnamespace", .keyword },
-    .{ "threadlocal",  .keyword }, .{ "allowzero",   .keyword },
-    .{ "noalias",      .keyword }, .{ "volatile",    .keyword },
-    .{ "and",          .keyword }, .{ "or",          .keyword },
-    .{ "orelse",       .keyword }, .{ "null",        .keyword },
-    .{ "undefined",    .keyword }, .{ "true",        .keyword },
-    .{ "false",        .keyword }, .{ "anytype",     .keyword },
-    .{ "noreturn",     .keyword }, .{ "anyopaque",   .keyword },
-    .{ "void",         .keyword }, .{ "bool",        .keyword },
-    .{ "type",         .keyword }, .{ "async",       .keyword },
-    .{ "await",        .keyword }, .{ "suspend",     .keyword },
-    .{ "resume",       .keyword }, .{ "nosuspend",   .keyword },
+    // Keywords
+    .{ "fn",            .keyword }, .{ "pub",          .keyword },
+    .{ "const",         .keyword }, .{ "var",          .keyword },
+    .{ "if",            .keyword }, .{ "else",         .keyword },
+    .{ "while",         .keyword }, .{ "for",          .keyword },
+    .{ "return",        .keyword }, .{ "break",        .keyword },
+    .{ "continue",      .keyword }, .{ "switch",       .keyword },
+    .{ "struct",        .keyword }, .{ "enum",         .keyword },
+    .{ "union",         .keyword }, .{ "error",        .keyword },
+    .{ "try",           .keyword }, .{ "catch",        .keyword },
+    .{ "defer",         .keyword }, .{ "errdefer",     .keyword },
+    .{ "unreachable",   .keyword }, .{ "comptime",     .keyword },
+    .{ "inline",        .keyword }, .{ "extern",       .keyword },
+    .{ "packed",        .keyword }, .{ "export",       .keyword },
+    .{ "test",          .keyword }, .{ "usingnamespace",.keyword },
+    .{ "threadlocal",   .keyword }, .{ "allowzero",    .keyword },
+    .{ "noalias",       .keyword }, .{ "volatile",     .keyword },
+    .{ "and",           .keyword }, .{ "or",           .keyword },
+    .{ "orelse",        .keyword }, .{ "null",         .keyword },
+    .{ "undefined",     .keyword }, .{ "true",         .keyword },
+    .{ "false",         .keyword }, .{ "anytype",      .keyword },
+    .{ "async",         .keyword }, .{ "await",        .keyword },
+    .{ "suspend",       .keyword }, .{ "resume",       .keyword },
+    .{ "nosuspend",     .keyword },
 });
 
 fn tagForTypeInContext(typ: []const u8, parent_type: []const u8) highlight.Tag {
@@ -110,6 +110,9 @@ fn tagForTypeInContext(typ: []const u8, parent_type: []const u8) highlight.Tag {
         if (std.mem.eql(u8, parent_type, "VarDecl") or
             std.mem.eql(u8, parent_type, "ParamDecl"))
             return .identifier_decl;
+        if (std.mem.eql(u8, parent_type, "FnProto") or
+            std.mem.eql(u8, parent_type, "call_expr"))
+            return .fn_name;
         return .identifier;
     }
     return TAG_MAP.get(typ) orelse .default;
@@ -121,6 +124,16 @@ fn tagForTypeInContext(typ: []const u8, parent_type: []const u8) highlight.Tag {
 // Pushes children in reverse order so the leftmost child is processed first,
 // preserving left-to-right source order in the output spans.
 const StackEntry = struct { node: TSNode, parent_type: []const u8 };
+
+fn hasFnCallArgs(node: TSNode) bool {
+    const count = ts_node_child_count(node);
+    var i: u32 = 0;
+    while (i < count) : (i += 1) {
+        if (std.mem.eql(u8, std.mem.span(ts_node_type(ts_node_child(node, i))), "FnCallArguments"))
+            return true;
+    }
+    return false;
+}
 
 fn walkTree(root: TSNode, allocator: std.mem.Allocator, out: *std.ArrayList(highlight.Span)) !void {
     var stack: std.ArrayList(StackEntry) = .{};
@@ -145,12 +158,17 @@ fn walkTree(root: TSNode, allocator: std.mem.Allocator, out: *std.ArrayList(high
             continue;
         }
 
-        // Push children in reverse order, passing this node's type as their parent.
+        // For SuffixExpr and FieldOrFnCall, check whether a FnCallArguments child
+        // is present so we can tag the callee identifier as fn_name.
+        const is_call = (std.mem.eql(u8, typ, "SuffixExpr") or
+                         std.mem.eql(u8, typ, "FieldOrFnCall")) and hasFnCallArgs(node);
+        const child_parent = if (is_call) "call_expr" else typ;
+
         const count = ts_node_child_count(node);
         var i: u32 = count;
         while (i > 0) {
             i -= 1;
-            try stack.append(allocator, .{ .node = ts_node_child(node, i), .parent_type = typ });
+            try stack.append(allocator, .{ .node = ts_node_child(node, i), .parent_type = child_parent });
         }
     }
 }
