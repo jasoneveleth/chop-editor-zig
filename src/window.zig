@@ -27,7 +27,7 @@ fn tagStyle(tag: highlight.Tag, scheme: Colorscheme) TagStyle {
             .builtin      => .{ .fg = draw.Color.rgb( 86, 182, 194) },
             .punctuation  => .{ .fg = draw.Color.rgb(150, 150, 150) },
             .identifier   => .{ .fg = draw.Color.rgb(224, 108, 117) },
-            .identifier_decl => .{ .fg = draw.Color.rgb( 97, 175, 239) },
+            .identifier_decl => .{ .fg = draw.Color.rgb(224, 108, 117) },
             .type_primitive  => .{ .fg = draw.Color.rgb(215, 186, 127) },
             .fn_name         => .{ .fg = draw.Color.rgb( 97, 175, 239) },
         },
