@@ -32,13 +32,13 @@ fn tagStyle(tag: highlight.Tag, scheme: Colorscheme) TagStyle {
         .alabaster => switch (tag) {
             .default      => .{ .fg = draw.Color.rgb( 27,  27,  27) },
             .keyword      => .{ .fg = draw.Color.rgb( 27,  27,  27) },
-            .string       => .{ .fg = draw.Color.rgb( 16,  96,  16), .bg = draw.Color.rgb(205, 238, 210) },
-            .comment      => .{ .fg = draw.Color.rgb(128,  20,  20), .bg = draw.Color.rgb(250, 215, 215) },
-            .number       => .{ .fg = draw.Color.rgb( 16,  96,  16), .bg = draw.Color.rgb(205, 238, 210) },
+            .string       => .{ .fg = draw.Color.rgb( 16,  96,  16), .bg = draw.Color.rgb(224, 244, 224) },
+            .comment      => .{ .fg = draw.Color.rgb(128,  20,  20), .bg = draw.Color.rgb(248, 228, 228) },
+            .number       => .{ .fg = draw.Color.rgb( 16,  96,  16), .bg = draw.Color.rgb(224, 244, 224) },
             .builtin      => .{ .fg = draw.Color.rgb( 27,  27,  27) },
             .punctuation  => .{ .fg = draw.Color.rgb( 79,  79,  79) },
             .identifier   => .{ .fg = draw.Color.rgb( 27,  27,  27) },
-            .identifier_decl => .{ .fg = draw.Color.rgb( 78,  18, 130), .bg = draw.Color.rgb(225, 210, 245) },
+            .identifier_decl => .{ .fg = draw.Color.rgb( 78,  18, 130), .bg = draw.Color.rgb(236, 224, 248) },
         },
     };
 }
@@ -153,7 +153,11 @@ pub const Window = struct {
                 if (ov_s >= ov_e) continue;
                 const hx = gutter_width + platform.measureText(content[line_start..ov_s], self.font_size);
                 const hw = platform.measureText(content[ov_s..ov_e], self.font_size);
-                try dl.fillRect(.{ .x = hx, .y = line_y, .w = hw, .h = line_height }, draw.Color.rgba(38, 120, 200, 120));
+                const sel_color = switch (scheme) {
+                    .onedark  => draw.Color.rgba( 38, 120, 200, 120),
+                    .alabaster => draw.Color.rgb(204, 236, 249),
+                };
+                try dl.fillRect(.{ .x = hx, .y = line_y, .w = hw, .h = line_height }, sel_color);
             }
 
             // Draw match highlights for this line.
@@ -191,7 +195,7 @@ pub const Window = struct {
                         const seg = content[pos..seg_e];
                         const style = tagStyle(span.tag, scheme);
                         const seg_w = platform.measureText(seg, self.font_size);
-                        if (style.bg) |bg| try dl.fillRect(.{ .x = x, .y = line_y, .w = seg_w, .h = line_height }, bg);
+                        if (style.bg) |bg| if (span.start >= line_start) try dl.fillRect(.{ .x = x, .y = line_y, .w = seg_w, .h = line_height }, bg);
                         try dl.drawText(x, baseline, seg, style.fg, self.font_size);
                         x += seg_w;
                         pos = seg_e;
