@@ -3,6 +3,7 @@ const BufferId = @import("buffer.zig").BufferId;
 const CursorSetId = @import("cursor_set.zig").CursorSetId;
 const CursorSet = @import("cursor_set.zig").CursorSet;
 const Op = @import("op.zig").Op;
+const Colorscheme = @import("op.zig").Colorscheme;
 
 pub const Match = struct {
     start: usize,
@@ -95,6 +96,7 @@ pub fn findPrevMatchFrom(matches: []const Match, from: usize) ?Match {
 pub const SETTINGS_ITEMS = [_]PickerItem{
     .{ .label = "Tab Width", .op_on_confirm = .tab_width_palette },
     .{ .label = "Language",  .op_on_confirm = .language_palette },
+    .{ .label = "Theme",     .op_on_confirm = .colorscheme_palette },
 };
 
 pub const TAB_WIDTH_ITEMS = [_]PickerItem{
@@ -106,4 +108,9 @@ pub const TAB_WIDTH_ITEMS = [_]PickerItem{
 pub const LANGUAGE_ITEMS = [_]PickerItem{
     .{ .label = "Zig",  .op_on_confirm = .{ .set_language = .zig } },
     .{ .label = "None", .op_on_confirm = .{ .set_language = .none } },
+};
+
+pub const COLORSCHEME_ITEMS = [_]PickerItem{
+    .{ .label = "OneDark",   .op_on_confirm = .{ .set_colorscheme = .onedark } },
+    .{ .label = "Alabaster", .op_on_confirm = .{ .set_colorscheme = .alabaster } },
 };

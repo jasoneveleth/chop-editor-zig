@@ -25,7 +25,9 @@ const findPrevMatchFrom = palette_mod.findPrevMatchFrom;
 const SETTINGS_ITEMS = palette_mod.SETTINGS_ITEMS;
 const TAB_WIDTH_ITEMS = palette_mod.TAB_WIDTH_ITEMS;
 const LANGUAGE_ITEMS = palette_mod.LANGUAGE_ITEMS;
+const COLORSCHEME_ITEMS = palette_mod.COLORSCHEME_ITEMS;
 const Op = @import("op.zig").Op;
+const Colorscheme = @import("op.zig").Colorscheme;
 const OpQueue = @import("op_queue.zig").OpQueue;
 const platform = @import("platform/web.zig");
 const grapheme = @import("grapheme.zig");
@@ -66,13 +68,13 @@ pub const Editor = struct {
     focused_window: WindowId,
     palette: Palette,
     last_input_ms: f64 = 0,
-    dark_mode: bool = true,
+    colorscheme: Colorscheme = .onedark,
     drag_anchor: ?usize = null,
     highlighters: std.ArrayList(Highlighter),
     op_queue: OpQueue = .{},
     tab_width: u8 = 4,
 
-    pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, dark_mode: bool) !Editor {
+    pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, is_dark: bool) !Editor {
         var editor = Editor{
             .allocator = allocator,
             .windows = .{},
@@ -82,7 +84,7 @@ pub const Editor = struct {
             .buffer_cursor_sets = std.AutoHashMap(u32, std.ArrayList(CursorSetId)).init(allocator),
             .focused_window = undefined,
             .palette = undefined,
-            .dark_mode = dark_mode,
+            .colorscheme = if (is_dark) .onedark else .alabaster,
             .highlighters = .{},
         };
 
@@ -354,7 +356,8 @@ pub const Editor = struct {
                 .filter_drop                 => self.op_queue.push(self.allocator, .{ .filter_drop = text }),
                 .settings_palette,
                 .tab_width_palette,
-                .language_palette => {
+                .language_palette,
+                .colorscheme_palette => {
                     // Find the picker_selected-th item that matches the current filter.
                     var visible: usize = 0;
                     for (self.palette.picker_items) |item| {
@@ -515,8 +518,19 @@ pub const Editor = struct {
                     .picker_items = &LANGUAGE_ITEMS,
                 }) catch {};
             },
+            .colorscheme_palette => {
+                self.openPalette(.{
+                    .prompt_symbol = "theme:",
+                    .op_kind = .colorscheme_palette,
+                    .prepopulate_selection = false,
+                    .picker_items = &COLORSCHEME_ITEMS,
+                }) catch {};
+            },
             .set_tab_width => |width| {
                 self.tab_width = width;
+            },
+            .set_colorscheme => |scheme| {
+                self.colorscheme = scheme;
             },
             .set_language => |lang| {
                 const win = self.getWindow(self.focused_window) orelse return;
@@ -541,12 +555,13 @@ pub const Editor = struct {
 
         const highlights: []const Match = if (win.mode == .command) self.palette.matches.items else &.{};
         const spans = self.highlighters.items[win.buffer_id.index].spans.items;
-        try win.buildDrawList(dl, buf, cs, &self.cursor_pool, highlights, spans, cursor_visible, self.dark_mode);
+        try win.buildDrawList(dl, buf, cs, &self.cursor_pool, highlights, spans, cursor_visible, self.colorscheme);
 
-        if (win.mode == .command) try self.drawPalette(dl, win, self.dark_mode);
+        if (win.mode == .command) try self.drawPalette(dl, win, self.colorscheme);
     }
 
-    fn drawPalette(self: *Editor, dl: *draw.DrawList, win: *const Window, dark_mode: bool) !void {
+    fn drawPalette(self: *Editor, dl: *draw.DrawList, win: *const Window, scheme: Colorscheme) !void {
+        const dark_mode = scheme == .onedark;
         if (self.palette.active == null) return;
         const font_size: f32 = 14;
         const line_height = font_size * 1.4;

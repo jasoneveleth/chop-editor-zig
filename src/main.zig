@@ -49,7 +49,7 @@ export fn on_resize(width: u32, height: u32) void {
 
 export fn set_dark_mode(is_dark: u32) void {
     if (!initialized) return;
-    editor.dark_mode = is_dark != 0;
+    editor.colorscheme = if (is_dark != 0) .onedark else .alabaster;
 }
 
 // Satisfy musl's CRT symbol requirement; never actually called (entry = .disabled).

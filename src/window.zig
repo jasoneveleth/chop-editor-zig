@@ -7,31 +7,39 @@ const CursorSetId = @import("cursor_set.zig").CursorSetId;
 const CursorPool = @import("cursor_set.zig").CursorPool;
 const Match = @import("palette.zig").Match;
 const highlight = @import("highlight.zig");
+const Colorscheme = @import("op.zig").Colorscheme;
 // Hardcoded to web for now — measureText is needed during layout.
 const platform = @import("platform/web.zig");
 
-fn tagColor(tag: highlight.Tag, dark_mode: bool) draw.Color {
-    if (dark_mode) return switch (tag) {
-        .default => draw.Color.rgb(204, 204, 204),
-        .keyword => draw.Color.rgb(255, 255, 255),
-        .string  => draw.Color.rgb(206, 145, 120),
-        .comment => draw.Color.rgb(197, 134, 192),
-        .number  => draw.Color.rgb(181, 206, 168),
-        .builtin => draw.Color.rgb(220, 220, 170),
-        .punctuation => draw.Color.rgb(150, 150, 150),
-        .identifier => draw.Color.rgb(255, 255, 255),
-        .identifier_decl => draw.Color.rgb(120, 132, 206),
-    };
-    return switch (tag) {
-        .default => draw.Color.rgb( 27,  27,  27),
-        .keyword => draw.Color.rgb( 27,  27,  27),
-        .string  => draw.Color.rgb(163,  21,  21),
-        .comment => draw.Color.rgb(175,   0, 219),
-        .number  => draw.Color.rgb(  9, 136,  90),
-        .builtin => draw.Color.rgb(121,  94,  38),
-        .punctuation => draw.Color.rgb(79, 79, 79),
-        .identifier => draw.Color.rgb(27,  27,  27),
-        .identifier_decl => draw.Color.rgb(20, 80, 219)
+const TagStyle = struct {
+    fg: draw.Color,
+    bg: ?draw.Color = null,
+};
+
+fn tagStyle(tag: highlight.Tag, scheme: Colorscheme) TagStyle {
+    return switch (scheme) {
+        .onedark => switch (tag) {
+            .default      => .{ .fg = draw.Color.rgb(204, 204, 204) },
+            .keyword      => .{ .fg = draw.Color.rgb(198, 120, 221) },
+            .string       => .{ .fg = draw.Color.rgb(152, 195, 121) },
+            .comment      => .{ .fg = draw.Color.rgb( 92, 100, 114) },
+            .number       => .{ .fg = draw.Color.rgb(209, 154,  99) },
+            .builtin      => .{ .fg = draw.Color.rgb( 86, 182, 194) },
+            .punctuation  => .{ .fg = draw.Color.rgb(150, 150, 150) },
+            .identifier   => .{ .fg = draw.Color.rgb(224, 108,  95) },
+            .identifier_decl => .{ .fg = draw.Color.rgb( 97, 175, 239) },
+        },
+        .alabaster => switch (tag) {
+            .default      => .{ .fg = draw.Color.rgb( 27,  27,  27) },
+            .keyword      => .{ .fg = draw.Color.rgb( 27,  27,  27) },
+            .string       => .{ .fg = draw.Color.rgb( 16,  96,  16), .bg = draw.Color.rgb(205, 238, 210) },
+            .comment      => .{ .fg = draw.Color.rgb(128,  20,  20), .bg = draw.Color.rgb(250, 215, 215) },
+            .number       => .{ .fg = draw.Color.rgb( 16,  96,  16), .bg = draw.Color.rgb(205, 238, 210) },
+            .builtin      => .{ .fg = draw.Color.rgb( 27,  27,  27) },
+            .punctuation  => .{ .fg = draw.Color.rgb( 79,  79,  79) },
+            .identifier   => .{ .fg = draw.Color.rgb( 27,  27,  27) },
+            .identifier_decl => .{ .fg = draw.Color.rgb( 78,  18, 130), .bg = draw.Color.rgb(225, 210, 245) },
+        },
     };
 }
 
@@ -90,9 +98,9 @@ pub const Window = struct {
 
     // No deinit — Window owns no heap memory.
 
-    pub fn buildDrawList(self: *Window, dl: *draw.DrawList, buf: *const Buffer, cs: *const CursorSet, pool: *const CursorPool, highlights: []const Match, spans: []const highlight.Span, cursor_visible: bool, dark_mode: bool) !void {
-        const bg_color   = if (dark_mode) draw.Color.rgb(27, 27, 27)   else draw.Color.rgb(247, 247, 247);
-        const text_color = if (dark_mode) draw.Color.rgb(204, 204, 204) else draw.Color.rgb(27, 27, 27);
+    pub fn buildDrawList(self: *Window, dl: *draw.DrawList, buf: *const Buffer, cs: *const CursorSet, pool: *const CursorPool, highlights: []const Match, spans: []const highlight.Span, cursor_visible: bool, scheme: Colorscheme) !void {
+        const bg_color   = switch (scheme) { .onedark => draw.Color.rgb(27, 27, 27),   .alabaster => draw.Color.rgb(247, 247, 247) };
+        const text_color = switch (scheme) { .onedark => draw.Color.rgb(204, 204, 204), .alabaster => draw.Color.rgb(27,  27,  27)  };
 
         // Background
         try dl.fillRect(
@@ -181,8 +189,11 @@ pub const Window = struct {
                     // Colored span text.
                     if (seg_e > pos) {
                         const seg = content[pos..seg_e];
-                        try dl.drawText(x, baseline, seg, tagColor(span.tag, dark_mode), self.font_size);
-                        x += platform.measureText(seg, self.font_size);
+                        const style = tagStyle(span.tag, scheme);
+                        const seg_w = platform.measureText(seg, self.font_size);
+                        if (style.bg) |bg| try dl.fillRect(.{ .x = x, .y = line_y, .w = seg_w, .h = line_height }, bg);
+                        try dl.drawText(x, baseline, seg, style.fg, self.font_size);
+                        x += seg_w;
                         pos = seg_e;
                     }
                     if (span.end <= line_end) si += 1 else break;
