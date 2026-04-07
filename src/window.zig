@@ -38,7 +38,7 @@ fn tagStyle(tag: highlight.Tag, scheme: Colorscheme) TagStyle {
             .comment      => .{ .fg = draw.Color.rgb(128,  20,  20), .bg = draw.Color.rgb(248, 228, 228) },
             .number       => .{ .fg = draw.Color.rgb( 16,  96,  16), .bg = draw.Color.rgb(224, 244, 224) },
             .builtin      => .{ .fg = draw.Color.rgb( 27,  27,  27) },
-            .punctuation  => .{ .fg = draw.Color.rgb( 79,  79,  79) },
+            .punctuation  => .{ .fg = draw.Color.rgb(160, 160, 160) },
             .identifier   => .{ .fg = draw.Color.rgb( 27,  27,  27) },
             .identifier_decl => .{ .fg = draw.Color.rgb( 78,  18, 130), .bg = draw.Color.rgb(236, 224, 248) },
             .type_primitive  => .{ .fg = draw.Color.rgb( 27,  27,  27) },
