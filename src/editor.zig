@@ -1756,6 +1756,43 @@ pub const Editor = struct {
         const buf = self.getBuffer(win.buffer_id) orelse return;
         const cs = self.getCursorSet(win.cursor_set_id) orelse return;
 
+        // When palette is open, intercept all mouse events.
+        if (win.mode == .command and self.palette.active != null) {
+            if (kind == 1 and button == 0) {
+                const font_size: f32 = 14;
+                const line_height = font_size * 1.4;
+                const input_row_h: f32 = line_height * 1.5;
+                const item_row_h: f32  = line_height * 1.4;
+                const pal_w: f32 = @min(600, @max(win.width - 80, 800));
+                const pal_x: f32 = (win.width - pal_w) / 2;
+                const pal_y: f32 = 24;
+
+                if (x < pal_x or x > pal_x + pal_w or y < pal_y) {
+                    // Click outside palette: close/cancel.
+                    self.closePalette(false);
+                } else if (y < pal_y + input_row_h) {
+                    // Click on input row: place palette cursor at clicked position.
+                    const pal_buf = self.getBuffer(self.palette.buffer_id) orelse return;
+                    const pal_cs = self.getCursorSet(self.palette.cursor_set_id) orelse return;
+                    const pattern = pal_buf.bytes();
+                    const prompt = self.palette.promptSymbol();
+                    const text_x = pal_x + 14;
+                    const pat_x = text_x + platform.measureText(prompt, font_size) + 6;
+                    const pos = cursor_mod.closestPosToX(pattern, 0, pattern.len, x - pat_x, font_size);
+                    if (pal_cs.len > 0) {
+                        pal_cs.iter(&self.cursor_pool)[0].head = pos;
+                        pal_cs.iter(&self.cursor_pool)[0].anchor = pos;
+                    }
+                } else {
+                    // Click on an item row: select and confirm that item.
+                    const fi: usize = @intFromFloat(@floor((y - pal_y - input_row_h) / item_row_h));
+                    self.palette.picker_selected = fi;
+                    self.closePalette(true);
+                }
+            }
+            return;
+        }
+
         switch (kind) {
             1 => { // mousedown
                 if (button != 0) return;
