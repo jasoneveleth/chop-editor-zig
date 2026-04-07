@@ -18,6 +18,7 @@ const MOD_ALT = @import("key.zig").MOD_ALT;
 const palette_mod = @import("palette.zig");
 const Palette = palette_mod.Palette;
 const Match = palette_mod.Match;
+const Regex = @import("regex").Regex;
 const PaletteConfig = palette_mod.PaletteConfig;
 const PickerItem = palette_mod.PickerItem;
 const findNextMatchFrom = palette_mod.findNextMatchFrom;
@@ -252,18 +253,34 @@ pub const Editor = struct {
         const saved = self.palette.saved_cursors;
         cs.clear();
 
+        var re = Regex.compile(self.allocator, pattern) catch null;
+        defer if (re) |*r| r.deinit();
+
         if (!complement) {
             for (self.cursor_pool.slice(saved.start, saved.len)) |cursor| {
                 if (!cursor.isSelection()) continue;
                 const sel_start = cursor.start();
                 const sel_end   = cursor.end();
                 var i: usize = sel_start;
-                while (i + pattern.len <= sel_end) {
-                    if (std.mem.eql(u8, content[i .. i + pattern.len], pattern)) {
-                        cs.insert(&self.cursor_pool, .{ .anchor = i, .head = i + pattern.len }) catch break;
-                        i += pattern.len;
-                    } else {
+                if (re) |*r| {
+                    while (i < sel_end) {
+                        if (r.match(content[i..sel_end]) catch false and r.slots.items.len >= 2) {
+                            if (r.slots.items[1]) |end_offset| {
+                                cs.insert(&self.cursor_pool, .{ .anchor = i, .head = i + end_offset }) catch break;
+                                if (end_offset == 0) { i += 1; } else { i += end_offset; }
+                                continue;
+                            }
+                        }
                         i += 1;
+                    }
+                } else {
+                    while (i + pattern.len <= sel_end) {
+                        if (std.mem.eql(u8, content[i .. i + pattern.len], pattern)) {
+                            cs.insert(&self.cursor_pool, .{ .anchor = i, .head = i + pattern.len }) catch break;
+                            i += pattern.len;
+                        } else {
+                            i += 1;
+                        }
                     }
                 }
             }
@@ -274,14 +291,29 @@ pub const Editor = struct {
                 const sel_end   = cursor.end();
                 var gap_start: usize = sel_start;
                 var i: usize = sel_start;
-                while (i + pattern.len <= sel_end) {
-                    if (std.mem.eql(u8, content[i .. i + pattern.len], pattern)) {
-                        if (gap_start < i)
-                            cs.insert(&self.cursor_pool, .{ .anchor = gap_start, .head = i }) catch break;
-                        i += pattern.len;
-                        gap_start = i;
-                    } else {
+                if (re) |*r| {
+                    while (i < sel_end) {
+                        if (r.match(content[i..sel_end]) catch false and r.slots.items.len >= 2) {
+                            if (r.slots.items[1]) |end_offset| {
+                                if (gap_start < i)
+                                    cs.insert(&self.cursor_pool, .{ .anchor = gap_start, .head = i }) catch break;
+                                if (end_offset == 0) { i += 1; } else { i += end_offset; }
+                                gap_start = i;
+                                continue;
+                            }
+                        }
                         i += 1;
+                    }
+                } else {
+                    while (i + pattern.len <= sel_end) {
+                        if (std.mem.eql(u8, content[i .. i + pattern.len], pattern)) {
+                            if (gap_start < i)
+                                cs.insert(&self.cursor_pool, .{ .anchor = gap_start, .head = i }) catch break;
+                            i += pattern.len;
+                            gap_start = i;
+                        } else {
+                            i += 1;
+                        }
                     }
                 }
                 if (gap_start < sel_end)
@@ -306,7 +338,16 @@ pub const Editor = struct {
             const sel_start = cursor.start();
             const sel_end   = cursor.end();
             const sel_text  = content[sel_start..sel_end];
-            const found = if (text.len == 0) false else std.mem.indexOf(u8, sel_text, text) != null;
+            const found = blk: {
+                if (text.len == 0) break :blk false;
+                var re = Regex.compile(self.allocator, text) catch break :blk std.mem.indexOf(u8, sel_text, text) != null;
+                defer re.deinit();
+                var j: usize = 0;
+                while (j < sel_text.len) : (j += 1) {
+                    if (re.match(sel_text[j..]) catch false) break :blk true;
+                }
+                break :blk false;
+            };
             const include = if (keep) found else !found;
             if (include) cs.insert(&self.cursor_pool, cursor) catch break;
         }
@@ -394,16 +435,40 @@ pub const Editor = struct {
 
         const pattern = pal_buf.bytes();
         if (pattern.len == 0) return;
-
         const content = main_buf.bytes();
+
+        var re = Regex.compile(self.allocator, pattern) catch {
+            return self.updateMatchesLiteral(pattern, content);
+        };
+        defer re.deinit();
+        try self.collectRegexMatches(&re, content);
+    }
+
+    fn updateMatchesLiteral(self: *Editor, pattern: []const u8, content: []const u8) void {
         var i: usize = 0;
         while (i + pattern.len <= content.len) {
             if (std.mem.eql(u8, content[i .. i + pattern.len], pattern)) {
-                try self.palette.matches.append(self.allocator, .{ .start = i, .end = i + pattern.len });
+                self.palette.matches.append(self.allocator, .{ .start = i, .end = i + pattern.len }) catch return;
                 i += pattern.len;
             } else {
                 i += 1;
             }
+        }
+    }
+
+    // Use anchored re.match() at each position rather than re.captures() which uses
+    // find_start (compiled as `.*?` with AnyCharNotNL) and stops scanning at newlines.
+    fn collectRegexMatches(self: *Editor, re: *Regex, content: []const u8) !void {
+        var i: usize = 0;
+        while (i < content.len) {
+            if (try re.match(content[i..]) and re.slots.items.len >= 2) {
+                if (re.slots.items[1]) |end_offset| {
+                    try self.palette.matches.append(self.allocator, .{ .start = i, .end = i + end_offset });
+                    if (end_offset == 0) { i += 1; } else { i += end_offset; }
+                    continue;
+                }
+            }
+            i += 1;
         }
     }
 

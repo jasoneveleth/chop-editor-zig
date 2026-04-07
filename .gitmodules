@@ -4,3 +4,6 @@
 [submodule "vendor/tree-sitter-zig"]
 	path = vendor/tree-sitter-zig
 	url = ssh://git@github.com/maxxnino/tree-sitter-zig
+[submodule "vendor/zig-regex"]
+	path = vendor/zig-regex
+	url = https://github.com/tiehuis/zig-regex

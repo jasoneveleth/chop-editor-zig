@@ -40,6 +40,15 @@ pub fn build(b: *std.Build) void {
         .flags = &.{ "-std=c99", "-fno-sanitize=all" },
     });
 
+    // ── zig-regex ──────────────────────────────────────────────────────────────
+    // Vendor setup (run once):
+    //   git submodule add https://github.com/tiehuis/zig-regex vendor/zig-regex
+
+    const regex_mod = b.createModule(.{
+        .root_source_file = b.path("vendor/zig-regex/src/regex.zig"),
+    });
+    root_module.addImport("regex", regex_mod);
+
     // Output goes to web/editor.wasm
     const install = b.addInstallArtifact(exe, .{
         .dest_dir = .{ .override = .{ .custom = "../web" } },
