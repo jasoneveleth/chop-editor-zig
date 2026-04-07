@@ -399,15 +399,24 @@ pub const Editor = struct {
                 .tab_width_palette,
                 .language_palette,
                 .colorscheme_palette => {
-                    // Find the picker_selected-th item that matches the current filter.
-                    var visible: usize = 0;
-                    for (self.palette.picker_items) |item| {
-                        if (text.len > 0 and std.mem.indexOf(u8, item.label, text) == null) continue;
-                        if (visible == self.palette.picker_selected) {
-                            self.op_queue.push(self.allocator, item.op_on_confirm);
-                            break;
+                    // Reproduce the same ranked filter as drawPalette to find the selected item.
+                    var cl_filtered_buf: [32]usize = undefined;
+                    var cl_scores_buf: [32]palette_mod.MatchScore = undefined;
+                    var cl_filtered_len: usize = 0;
+                    for (self.palette.picker_items, 0..) |item, i| {
+                        const score = palette_mod.scoreMatch(text, item.label);
+                        if (score.tier != 255) {
+                            cl_filtered_buf[cl_filtered_len] = i;
+                            cl_scores_buf[cl_filtered_len] = score;
+                            cl_filtered_len += 1;
+                            if (cl_filtered_len >= cl_filtered_buf.len) break;
                         }
-                        visible += 1;
+                    }
+                    if (text.len > 0)
+                        palette_mod.sortResults(cl_filtered_buf[0..cl_filtered_len], cl_scores_buf[0..cl_filtered_len]);
+                    if (self.palette.picker_selected < cl_filtered_len) {
+                        const item = self.palette.picker_items[cl_filtered_buf[self.palette.picker_selected]];
+                        self.op_queue.push(self.allocator, item.op_on_confirm);
                     }
                 },
             }
@@ -647,16 +656,21 @@ pub const Editor = struct {
         const pal_buf = self.getBuffer(self.palette.buffer_id) orelse return;
         const pattern = pal_buf.bytes();
 
-        // Compute filtered picker items (indices into picker_items, max 32).
+        // Compute filtered+ranked picker items (indices into picker_items, max 32).
         var filtered_buf: [32]usize = undefined;
+        var scores_buf: [32]palette_mod.MatchScore = undefined;
         var filtered_len: usize = 0;
         for (self.palette.picker_items, 0..) |item, i| {
-            if (pattern.len == 0 or std.mem.indexOf(u8, item.label, pattern) != null) {
+            const score = palette_mod.scoreMatch(pattern, item.label);
+            if (score.tier != 255) {
                 filtered_buf[filtered_len] = i;
+                scores_buf[filtered_len] = score;
                 filtered_len += 1;
                 if (filtered_len >= filtered_buf.len) break;
             }
         }
+        if (pattern.len > 0)
+            palette_mod.sortResults(filtered_buf[0..filtered_len], scores_buf[0..filtered_len]);
         const filtered = filtered_buf[0..filtered_len];
 
         // Total height: input row + item rows.
@@ -1688,7 +1702,7 @@ pub const Editor = struct {
                         const pat_d = pal_buf_d.bytes();
                         var filtered_count: usize = 0;
                         for (self.palette.picker_items) |item| {
-                            if (pat_d.len == 0 or std.mem.indexOf(u8, item.label, pat_d) != null)
+                            if (palette_mod.scoreMatch(pat_d, item.label).tier != 255)
                                 filtered_count += 1;
                         }
                         if (filtered_count > 0 and self.palette.picker_selected + 1 < filtered_count)

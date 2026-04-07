@@ -10,6 +10,104 @@ pub const Match = struct {
     end: usize,
 };
 
+pub const MatchScore = struct {
+    /// 0 = empty pattern (preserve order), 1–5 = ranked tiers, 255 = no match.
+    tier: u8,
+    /// Position of first matched char; lower = better within same tier.
+    pos: usize,
+    /// For fuzzy tier only: total gap chars between matched chars.
+    gaps: usize,
+
+    pub const NO_MATCH = MatchScore{ .tier = 255, .pos = 0, .gaps = 0 };
+
+    pub fn lessThan(self: MatchScore, other: MatchScore) bool {
+        if (self.tier != other.tier) return self.tier < other.tier;
+        if (self.pos  != other.pos)  return self.pos  < other.pos;
+        return self.gaps < other.gaps;
+    }
+};
+
+/// Score how well `pattern` matches `label` for picker ranking.
+/// Returns NO_MATCH if no match is possible.
+pub fn scoreMatch(pattern: []const u8, label: []const u8) MatchScore {
+    if (pattern.len == 0) return .{ .tier = 0, .pos = 0, .gaps = 0 };
+
+    // Word boundary: position 0 or immediately after a space.
+    // Tier 1: case-sensitive match at a word boundary.
+    {
+        var pos: usize = 0;
+        while (pos + pattern.len <= label.len) : (pos += 1) {
+            if ((pos == 0 or label[pos - 1] == ' ') and
+                std.mem.eql(u8, label[pos .. pos + pattern.len], pattern))
+                return .{ .tier = 1, .pos = pos, .gaps = 0 };
+        }
+    }
+    // Tier 2: case-insensitive match at a word boundary.
+    {
+        var pos: usize = 0;
+        while (pos + pattern.len <= label.len) : (pos += 1) {
+            if ((pos == 0 or label[pos - 1] == ' ') and
+                std.ascii.eqlIgnoreCase(label[pos .. pos + pattern.len], pattern))
+                return .{ .tier = 2, .pos = pos, .gaps = 0 };
+        }
+    }
+    // Tier 3: case-sensitive substring anywhere.
+    if (std.mem.indexOf(u8, label, pattern)) |p|
+        return .{ .tier = 3, .pos = p, .gaps = 0 };
+    // Tier 4: case-insensitive substring anywhere.
+    if (indexOfIgnoreCase(label, pattern)) |p|
+        return .{ .tier = 4, .pos = p, .gaps = 0 };
+    // Tier 5: fuzzy — all pattern chars found in order.
+    return fuzzyScore(pattern, label);
+}
+
+fn indexOfIgnoreCase(label: []const u8, pattern: []const u8) ?usize {
+    if (pattern.len > label.len) return null;
+    var i: usize = 0;
+    while (i + pattern.len <= label.len) : (i += 1) {
+        if (std.ascii.eqlIgnoreCase(label[i .. i + pattern.len], pattern)) return i;
+    }
+    return null;
+}
+
+fn fuzzyScore(pattern: []const u8, label: []const u8) MatchScore {
+    var li: usize = 0;
+    var pi: usize = 0;
+    var first_pos: usize = 0;
+    var gaps: usize = 0;
+    var prev: usize = 0;
+    while (li < label.len and pi < pattern.len) : (li += 1) {
+        if (std.ascii.toLower(label[li]) == std.ascii.toLower(pattern[pi])) {
+            if (pi == 0) first_pos = li;
+            if (pi > 0) gaps += li - prev - 1;
+            prev = li;
+            pi += 1;
+        }
+    }
+    if (pi == pattern.len) return .{ .tier = 5, .pos = first_pos, .gaps = gaps };
+    return MatchScore.NO_MATCH;
+}
+
+/// In-place quicksort of parallel `indices`/`scores` arrays by score (ascending).
+/// Uses Lomuto partition with last-element pivot.
+pub fn sortResults(indices: []usize, scores: []MatchScore) void {
+    if (indices.len <= 1) return;
+    // Partition: pivot = last element.
+    const pivot = scores[indices.len - 1];
+    var i: usize = 0;
+    for (0..indices.len - 1) |j| {
+        if (scores[j].lessThan(pivot)) {
+            std.mem.swap(usize,       &indices[i], &indices[j]);
+            std.mem.swap(MatchScore,  &scores[i],  &scores[j]);
+            i += 1;
+        }
+    }
+    std.mem.swap(usize,      &indices[i], &indices[indices.len - 1]);
+    std.mem.swap(MatchScore, &scores[i],  &scores[indices.len - 1]);
+    sortResults(indices[0..i],      scores[0..i]);
+    sortResults(indices[i + 1..],   scores[i + 1..]);
+}
+
 pub const PreviewKind = enum {
     search_highlights,
     none,
