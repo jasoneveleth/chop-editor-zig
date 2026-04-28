@@ -6,7 +6,7 @@ const KeyChord = @import("key.zig").KeyChord;
 const MOD_SHIFT = @import("key.zig").MOD_SHIFT;
 const MOD_CTRL = @import("key.zig").MOD_CTRL;
 const MOD_ALT = @import("key.zig").MOD_ALT;
-const actions = @import("actions.zig");
+const actions = @import("key_actions.zig");
 const Action = actions.Action;
 const Mode = @import("window.zig").Mode;
 

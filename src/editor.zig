@@ -36,7 +36,7 @@ const grapheme = @import("grapheme.zig");
 const Highlighter = @import("highlighter.zig").Highlighter;
 const FILLER_TEXT = @import("filler.zig").FILLER_TEXT;
 const keybinds = @import("keybinds.zig");
-const actions = @import("actions.zig");
+const actions = @import("key_actions.zig");
 
 // ── Cursor movement helpers ────────────────────────────────────────────────
 
