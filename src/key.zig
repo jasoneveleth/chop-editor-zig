@@ -24,3 +24,15 @@ pub const MOD_SHIFT: u32 = 1 << 0;
 pub const MOD_CTRL:  u32 = 1 << 1;
 pub const MOD_ALT:   u32 = 1 << 2;
 pub const MOD_META:  u32 = 1 << 3;
+
+/// A packed key + modifier set, used as the dispatch table key.
+/// key:  low 22 bits — Unicode codepoint or truncated special-key value.
+/// mods: high 10 bits — modifier flags (shift/ctrl/alt/meta).
+pub const KeyChord = packed struct(u32) {
+    key:  u22,
+    mods: u10,
+
+    pub fn hasMod(self: KeyChord, mod: u32) bool {
+        return (self.mods & @as(u10, @truncate(mod))) != 0;
+    }
+};

@@ -2,13 +2,15 @@ const std = @import("std");
 const draw = @import("draw.zig");
 const Buffer = @import("buffer.zig").Buffer;
 const BufferId = @import("buffer.zig").BufferId;
-const Window = @import("window.zig").Window;
-const WindowId = @import("window.zig").WindowId;
-const PendingState = @import("window.zig").PendingState;
-const CursorSet = @import("cursor_set.zig").CursorSet;
-const CursorSetId = @import("cursor_set.zig").CursorSetId;
-const CursorPool = @import("cursor_set.zig").CursorPool;
-const MAX_CURSORS = @import("cursor_set.zig").MAX_CURSORS;
+const window_mod = @import("window.zig");
+const Window = window_mod.Window;
+const WindowId = window_mod.WindowId;
+const PendingState = window_mod.PendingState;
+const buffer_view_mod = @import("buffer_view.zig");
+const BufferView = buffer_view_mod.BufferView;
+const BufferViewId = buffer_view_mod.BufferViewId;
+const CursorPool = buffer_view_mod.CursorPool;
+const MAX_CURSORS = buffer_view_mod.MAX_CURSORS;
 const cursor_mod = @import("cursor.zig");
 const Cursor = cursor_mod.Cursor;
 const Key = @import("key.zig").Key;
@@ -29,18 +31,29 @@ const LANGUAGE_ITEMS = palette_mod.LANGUAGE_ITEMS;
 const COLORSCHEME_ITEMS = palette_mod.COLORSCHEME_ITEMS;
 const Op = @import("op.zig").Op;
 const Colorscheme = @import("op.zig").Colorscheme;
-const OpQueue = @import("op_queue.zig").OpQueue;
 const platform = @import("platform/web.zig");
 const grapheme = @import("grapheme.zig");
 const Highlighter = @import("highlighter.zig").Highlighter;
 const FILLER_TEXT = @import("filler.zig").FILLER_TEXT;
+const keybinds = @import("keybinds.zig");
+const actions = @import("actions.zig");
 
 // ── Cursor movement helpers ────────────────────────────────────────────────
 
 /// Convert a click position to a buffer byte offset.
-fn posFromPoint(win: *const Window, content: []const u8, click_x: f32, click_y: f32) usize {
+fn posFromPoint(win: *const Window, buf: *const Buffer, content: []const u8, click_x: f32, click_y: f32) usize {
     const line_height = win.font_size * 1.4;
     const gutter_width: f32 = 8;
+
+    if (buf.softwrap and buf.wrap_rows.items.len > 0) {
+        const row_idx: usize = @min(
+            @as(usize, @intFromFloat(@floor(@max(0.0, (click_y + win.scroll_y) / line_height)))),
+            buf.wrap_rows.items.len - 1,
+        );
+        const row = buf.wrap_rows.items[row_idx];
+        return cursor_mod.closestPosToX(content, row.start, row.end, click_x - gutter_width, win.font_size);
+    }
+
     const line_idx: usize = @intFromFloat(@floor(@max(0.0, (click_y + win.scroll_y) / line_height)));
     var current_line: usize = 0;
     var line_start: usize = 0;
@@ -62,27 +75,27 @@ pub const Editor = struct {
     allocator: std.mem.Allocator,
     windows: std.ArrayList(Window),
     buffers: std.ArrayList(Buffer),
-    cursor_sets: std.ArrayList(CursorSet),
+    buffer_views: std.ArrayList(BufferView),
     cursor_pool: CursorPool,
-    /// Maps BufferId (bit-cast to u32) → list of CursorSetIds watching that buffer.
-    buffer_cursor_sets: std.AutoHashMap(u32, std.ArrayList(CursorSetId)),
+    /// Maps BufferId (bit-cast to u32) → list of BufferViewIds watching that buffer.
+    buffer_view_map: std.AutoHashMap(u32, std.ArrayList(BufferViewId)),
     focused_window: WindowId,
     palette: Palette,
     last_input_ms: f64 = 0,
     colorscheme: Colorscheme = .onedark,
     drag_anchor: ?usize = null,
     highlighters: std.ArrayList(Highlighter),
-    op_queue: OpQueue = .{},
     tab_width: u8 = 4,
+    key_tables: keybinds.KeyTables = .{},
 
     pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, is_dark: bool) !Editor {
         var editor = Editor{
             .allocator = allocator,
             .windows = .{},
             .buffers = .{},
-            .cursor_sets = .{},
+            .buffer_views = .{},
             .cursor_pool = .{},
-            .buffer_cursor_sets = std.AutoHashMap(u32, std.ArrayList(CursorSetId)).init(allocator),
+            .buffer_view_map = std.AutoHashMap(u32, std.ArrayList(BufferViewId)).init(allocator),
             .focused_window = undefined,
             .palette = undefined,
             .colorscheme = if (is_dark) .onedark else .alabaster,
@@ -93,32 +106,33 @@ pub const Editor = struct {
         const buf_id = try editor.createBuffer();
         editor.getBuffer(buf_id).?.insert(0, FILLER_TEXT) catch {};
         editor.highlighters.items[buf_id.index].rehighlight(FILLER_TEXT) catch {};
-        const cs_id = try editor.createCursorSet(buf_id);
-        try editor.getCursorSet(cs_id).?.insert(&editor.cursor_pool, Cursor.init(0));
+        const cs_id = try editor.createBufferView(buf_id);
+        try editor.getBufferView(cs_id).?.insert(&editor.cursor_pool, Cursor.init(0));
         editor.focused_window = try editor.createWindow(buf_id, cs_id, width, height);
 
-        // Palette buffer + cursor set (empty, cleared on each open).
-        const pal_buf_id = try editor.createBuffer();
-        const pal_cs_id = try editor.createCursorSet(pal_buf_id);
-        try editor.getCursorSet(pal_cs_id).?.insert(&editor.cursor_pool, Cursor.init(0));
-        editor.palette = Palette.init(pal_buf_id, pal_cs_id);
+        editor.palette = Palette.init();
+        editor.key_tables = .{
+            .normal  = try keybinds.buildNormalTable(allocator),
+            .insert  = try keybinds.buildInsertTable(allocator),
+            .command = try keybinds.buildCommandTable(allocator),
+        };
 
         return editor;
     }
 
     pub fn deinit(self: *Editor) void {
+        self.key_tables.deinit(self.allocator);
         self.palette.deinit(self.allocator);
-        var it = self.buffer_cursor_sets.valueIterator();
+        var it = self.buffer_view_map.valueIterator();
         while (it.next()) |list| list.deinit(self.allocator);
-        self.buffer_cursor_sets.deinit();
+        self.buffer_view_map.deinit();
         for (self.buffers.items) |*b| b.deinit();
         for (self.highlighters.items) |*h| h.deinit();
         self.highlighters.deinit();
-        self.op_queue.deinit(self.allocator);
         self.cursor_pool.deinit(self.allocator);
         self.windows.deinit(self.allocator);
         self.buffers.deinit(self.allocator);
-        self.cursor_sets.deinit(self.allocator);
+        self.buffer_views.deinit(self.allocator);
     }
 
     pub fn createBuffer(self: *Editor) !BufferId {
@@ -130,21 +144,21 @@ pub const Editor = struct {
         return id;
     }
 
-    pub fn createCursorSet(self: *Editor, buffer_id: BufferId) !CursorSetId {
-        const index: u24 = @intCast(self.cursor_sets.items.len);
+    pub fn createBufferView(self: *Editor, buffer_id: BufferId) !BufferViewId {
+        const index: u24 = @intCast(self.buffer_views.items.len);
         const cs_start = try self.cursor_pool.allocSlots(self.allocator, MAX_CURSORS);
-        try self.cursor_sets.append(self.allocator, CursorSet.init(buffer_id, cs_start));
-        const id = CursorSetId{ .index = index, .generation = 0 };
+        try self.buffer_views.append(self.allocator, BufferView.init(buffer_id, cs_start));
+        const id = BufferViewId{ .index = index, .generation = 0 };
         const key: u32 = @bitCast(buffer_id);
-        const gop = try self.buffer_cursor_sets.getOrPut(key);
+        const gop = try self.buffer_view_map.getOrPut(key);
         if (!gop.found_existing) gop.value_ptr.* = .{};
         try gop.value_ptr.append(self.allocator, id);
         return id;
     }
 
-    pub fn createWindow(self: *Editor, buffer_id: BufferId, cursor_set_id: CursorSetId, width: u32, height: u32) !WindowId {
+    pub fn createWindow(self: *Editor, buffer_id: BufferId, buffer_view_id: BufferViewId, width: u32, height: u32) !WindowId {
         const index: u24 = @intCast(self.windows.items.len);
-        try self.windows.append(self.allocator, Window.init(buffer_id, cursor_set_id, width, height));
+        try self.windows.append(self.allocator, Window.init(buffer_id, buffer_view_id, width, height));
         return WindowId{ .index = index, .generation = 0 };
     }
 
@@ -158,59 +172,23 @@ pub const Editor = struct {
         return &self.buffers.items[id.index];
     }
 
-    pub fn getCursorSet(self: *Editor, id: CursorSetId) ?*CursorSet {
-        if (id.index >= self.cursor_sets.items.len) return null;
-        return &self.cursor_sets.items[id.index];
+    pub fn getBufferView(self: *Editor, id: BufferViewId) ?*BufferView {
+        if (id.index >= self.buffer_views.items.len) return null;
+        return &self.buffer_views.items[id.index];
     }
 
     /// Infallible buffer accessor — valid whenever the window/buffer_id was created by this editor.
-    fn bufOf(self: *Editor, id: BufferId) *Buffer {
+    pub fn bufOf(self: *Editor, id: BufferId) *Buffer {
         return &self.buffers.items[id.index];
     }
 
-    /// Insert text into a buffer and fan out cursor adjustments to all watching cursor sets.
-    pub fn bufferInsert(self: *Editor, buffer_id: BufferId, pos: usize, text: []const u8) !void {
-        const buf = self.getBuffer(buffer_id) orelse return;
-        try buf.insert(pos, text);
-        const key: u32 = @bitCast(buffer_id);
-        if (self.buffer_cursor_sets.get(key)) |ids| {
-            for (ids.items) |cs_id| {
-                if (self.getCursorSet(cs_id)) |cs| cs.adjustForInsert(&self.cursor_pool, pos, text.len);
-            }
-        }
-        if (@as(u32, @bitCast(buffer_id)) != @as(u32, @bitCast(self.palette.buffer_id))) {
-            self.palette.matches_stale = true;
-            buf.history.recordInsert(self.allocator, pos, text);
-            self.highlighters.items[buffer_id.index].rehighlight(buf.bytes()) catch {};
-        }
-    }
-
-    /// Delete from a buffer and fan out cursor adjustments to all watching cursor sets.
-    pub fn bufferDelete(self: *Editor, buffer_id: BufferId, pos: usize, len: usize) void {
-        const buf = self.getBuffer(buffer_id) orelse return;
-        if (@as(u32, @bitCast(buffer_id)) != @as(u32, @bitCast(self.palette.buffer_id))) {
-            const end = @min(pos + len, buf.len());
-            buf.history.recordDelete(self.allocator, pos, buf.slice(pos, end));
-        }
-        buf.delete(pos, len) catch {};
-        const key: u32 = @bitCast(buffer_id);
-        if (self.buffer_cursor_sets.get(key)) |ids| {
-            for (ids.items) |cs_id| {
-                if (self.getCursorSet(cs_id)) |cs| cs.adjustForDelete(&self.cursor_pool, pos, len);
-            }
-        }
-        if (@as(u32, @bitCast(buffer_id)) != @as(u32, @bitCast(self.palette.buffer_id))) {
-            self.palette.matches_stale = true;
-            const buf_after = self.getBuffer(buffer_id) orelse return;
-            self.highlighters.items[buffer_id.index].rehighlight(buf_after.bytes()) catch {};
-        }
-    }
+    // Fan-out functions moved to free functions doInsert/doDelete below.
 
     // ── Search ────────────────────────────────────────────────────────────────
 
-    fn openPalette(self: *Editor, config: PaletteConfig) !void {
+    pub fn openPalette(self: *Editor, config: PaletteConfig) !void {
         const win = self.getWindow(self.focused_window) orelse return;
-        const cs = self.getCursorSet(win.cursor_set_id) orelse return;
+        const cs = self.getBufferView(win.buffer_view_id) orelse return;
 
         if (config.require_selection and !cs.hasSelection(&self.cursor_pool)) return;
 
@@ -220,13 +198,7 @@ pub const Editor = struct {
         const snap_start = self.cursor_pool.snapshotRange(self.allocator, cs.start, cs.len) catch cs.start;
         self.palette.saved_cursors = .{ .buffer_id = cs.buffer_id, .start = snap_start, .len = cs.len };
 
-        const pal_buf = self.getBuffer(self.palette.buffer_id) orelse return;
-        if (pal_buf.len() > 0) self.bufferDelete(self.palette.buffer_id, 0, pal_buf.len());
-
-        const pal_cs = self.getCursorSet(self.palette.cursor_set_id) orelse return;
-        pal_cs.clear();
-        try pal_cs.insert(&self.cursor_pool, Cursor.init(0));
-
+        self.palette.input.clear();
         self.palette.matches.clearRetainingCapacity();
         win.mode = .command;
 
@@ -236,9 +208,7 @@ pub const Editor = struct {
                 const main_buf = self.getBuffer(win.buffer_id) orelse return;
                 const c = cs_items[0];
                 const selected = main_buf.bytes()[c.start()..c.end()];
-                pal_buf.insert(0, selected) catch {};
-                pal_cs.iter(&self.cursor_pool)[0].head = selected.len;
-                pal_cs.iter(&self.cursor_pool)[0].anchor = selected.len;
+                self.palette.input.setText(selected);
                 self.updateMatches() catch {};
             }
         }
@@ -246,7 +216,7 @@ pub const Editor = struct {
 
     fn executeSplit(self: *Editor, text: []const u8, complement: bool) void {
         const win = self.getWindow(self.focused_window) orelse return;
-        const cs = self.getCursorSet(win.cursor_set_id) orelse return;
+        const cs = self.getBufferView(win.buffer_view_id) orelse return;
         const buf = self.getBuffer(win.buffer_id) orelse return;
         const content = buf.bytes();
         const pattern: []const u8 = if (text.len == 0) "\n" else text;
@@ -327,7 +297,7 @@ pub const Editor = struct {
 
     fn executeFilter(self: *Editor, text: []const u8, keep: bool) void {
         const win = self.getWindow(self.focused_window) orelse return;
-        const cs = self.getCursorSet(win.cursor_set_id) orelse return;
+        const cs = self.getBufferView(win.buffer_view_id) orelse return;
         const buf = self.getBuffer(win.buffer_id) orelse return;
         const content = buf.bytes();
         const saved = self.palette.saved_cursors;
@@ -358,7 +328,7 @@ pub const Editor = struct {
 
     fn executeSearch(self: *Editor, direction: enum { forward, backward }) void {
         const win = self.getWindow(self.focused_window) orelse return;
-        const cs = self.getCursorSet(win.cursor_set_id) orelse return;
+        const cs = self.getBufferView(win.buffer_view_id) orelse return;
         const saved = self.palette.saved_cursors;
 
         if (self.palette.matches.items.len > 0) {
@@ -378,23 +348,22 @@ pub const Editor = struct {
         }
     }
 
-    fn closePalette(self: *Editor, confirm: bool) void {
+    pub fn closePalette(self: *Editor, confirm: bool) void {
         const win = self.getWindow(self.focused_window) orelse return;
         win.mode = .normal;
-        const cs = self.getCursorSet(win.cursor_set_id) orelse return;
+        const cs = self.getBufferView(win.buffer_view_id) orelse return;
 
         const config = self.palette.active orelse return;
 
         if (confirm) {
-            const pal_buf = self.getBuffer(self.palette.buffer_id) orelse return;
-            const text = pal_buf.bytes();
+            const text = self.palette.input.bytes();
             switch (config.op_kind) {
-                .search_forward              => self.op_queue.push(self.allocator, .{ .search_forward = text }),
-                .search_backward             => self.op_queue.push(self.allocator, .{ .search_backward = text }),
-                .split_selections            => self.op_queue.push(self.allocator, .{ .split_selections = text }),
-                .split_selections_complement => self.op_queue.push(self.allocator, .{ .split_selections_complement = text }),
-                .filter_keep                 => self.op_queue.push(self.allocator, .{ .filter_keep = text }),
-                .filter_drop                 => self.op_queue.push(self.allocator, .{ .filter_drop = text }),
+                .search_forward              => self.executeSearch(.forward),
+                .search_backward             => self.executeSearch(.backward),
+                .split_selections            => self.executeSplit(text, false),
+                .split_selections_complement => self.executeSplit(text, true),
+                .filter_keep                 => self.executeFilter(text, true),
+                .filter_drop                 => self.executeFilter(text, false),
                 .settings_palette,
                 .tab_width_palette,
                 .language_palette,
@@ -416,33 +385,31 @@ pub const Editor = struct {
                         palette_mod.sortResults(cl_filtered_buf[0..cl_filtered_len], cl_scores_buf[0..cl_filtered_len]);
                     if (self.palette.picker_selected < cl_filtered_len) {
                         const item = self.palette.picker_items[cl_filtered_buf[self.palette.picker_selected]];
-                        self.op_queue.push(self.allocator, item.op_on_confirm);
+                        self.executeOp(item.op_on_confirm);
                     }
                 },
             }
         } else {
             cs.restoreFrom(&self.cursor_pool, self.palette.saved_cursors.start, self.palette.saved_cursors.len);
             self.palette.matches.clearRetainingCapacity();
-            self.op_queue.push(self.allocator, .cancel_palette);
         }
 
         self.palette.active = null;
     }
 
-    fn requireFreshMatches(self: *Editor) void {
+    pub fn requireFreshMatches(self: *Editor) void {
         if (self.palette.matches_stale) {
             self.updateMatches() catch {};
         }
     }
 
-    fn updateMatches(self: *Editor) !void {
+    pub fn updateMatches(self: *Editor) !void {
         self.palette.matches_stale = false;
         self.palette.matches.clearRetainingCapacity();
         const win = self.getWindow(self.focused_window) orelse return;
-        const pal_buf = self.getBuffer(self.palette.buffer_id) orelse return;
         const main_buf = self.getBuffer(win.buffer_id) orelse return;
 
-        const pattern = pal_buf.bytes();
+        const pattern = self.palette.input.bytes();
         if (pattern.len == 0) return;
         const content = main_buf.bytes();
 
@@ -481,101 +448,8 @@ pub const Editor = struct {
         }
     }
 
-    pub fn processOps(self: *Editor) void {
-        while (self.op_queue.pop()) |op| {
-            self.executeOp(op);
-        }
-    }
-
     fn executeOp(self: *Editor, op: Op) void {
         switch (op) {
-            .search_forward => |maybe_text| {
-                if (maybe_text != null) {
-                    self.executeSearch(.forward);
-                } else {
-                    self.openPalette(.{
-                        .prompt_symbol = "/",
-                        .op_kind = .search_forward,
-                        .preview = .search_highlights,
-                    }) catch {};
-                }
-            },
-            .search_backward => |maybe_text| {
-                if (maybe_text != null) {
-                    self.executeSearch(.backward);
-                } else {
-                    self.openPalette(.{
-                        .prompt_symbol = "?",
-                        .op_kind = .search_backward,
-                        .preview = .search_highlights,
-                    }) catch {};
-                }
-            },
-            .split_selections => |maybe_text| {
-                if (maybe_text) |text| {
-                    self.executeSplit(text, false);
-                } else {
-                    self.openPalette(.{
-                        .prompt_symbol = "s/",
-                        .op_kind = .split_selections,
-                        .require_selection = true,
-                        .prepopulate_selection = false,
-                    }) catch {};
-                }
-            },
-            .split_selections_complement => |maybe_text| {
-                if (maybe_text) |text| {
-                    self.executeSplit(text, true);
-                } else {
-                    self.openPalette(.{
-                        .prompt_symbol = "S/",
-                        .op_kind = .split_selections_complement,
-                        .require_selection = true,
-                        .prepopulate_selection = false,
-                    }) catch {};
-                }
-            },
-            .filter_keep => |maybe_text| {
-                if (maybe_text) |text| {
-                    self.executeFilter(text, true);
-                } else {
-                    self.openPalette(.{
-                        .prompt_symbol = "v/",
-                        .op_kind = .filter_keep,
-                        .require_selection = true,
-                        .prepopulate_selection = false,
-                    }) catch {};
-                }
-            },
-            .filter_drop => |maybe_text| {
-                if (maybe_text) |text| {
-                    self.executeFilter(text, false);
-                } else {
-                    self.openPalette(.{
-                        .prompt_symbol = "V/",
-                        .op_kind = .filter_drop,
-                        .require_selection = true,
-                        .prepopulate_selection = false,
-                    }) catch {};
-                }
-            },
-            .preview => |payload| {
-                switch (payload.intent) {
-                    .search_forward, .search_backward => self.updateMatches() catch {},
-                    else => {},
-                }
-            },
-            .cancel_palette => {
-                self.palette.matches.clearRetainingCapacity();
-            },
-            .settings_palette => {
-                self.openPalette(.{
-                    .prompt_symbol = ":",
-                    .op_kind = .settings_palette,
-                    .prepopulate_selection = false,
-                    .picker_items = &SETTINGS_ITEMS,
-                }) catch {};
-            },
             .tab_width_palette => {
                 self.openPalette(.{
                     .prompt_symbol = "tab:",
@@ -599,6 +473,11 @@ pub const Editor = struct {
                     .prepopulate_selection = false,
                     .picker_items = &COLORSCHEME_ITEMS,
                 }) catch {};
+            },
+            .toggle_softwrap => {
+                const win = self.getWindow(self.focused_window) orelse return;
+                const buf = self.getBuffer(win.buffer_id) orelse return;
+                buf.softwrap = !buf.softwrap;
             },
             .set_tab_width => |width| {
                 self.tab_width = width;
@@ -625,7 +504,10 @@ pub const Editor = struct {
 
         const win = self.getWindow(self.focused_window) orelse return;
         const buf = self.getBuffer(win.buffer_id) orelse return;
-        const cs = self.getCursorSet(win.cursor_set_id) orelse return;
+        const cs = self.getBufferView(win.buffer_view_id) orelse return;
+
+        const available_w = win.width - 8; // gutter_width
+        try buf.buildWrapRows(available_w, win.font_size);
 
         const highlights: []const Match = if (win.mode == .command) self.palette.matches.items else &.{};
         const spans = self.highlighters.items[win.buffer_id.index].spans.items;
@@ -653,8 +535,7 @@ pub const Editor = struct {
         const sel_bg   = if (dark_mode) draw.Color.rgb(55, 75, 115)   else draw.Color.rgb(180, 200, 240);
 
         // Pattern text (drives both display and picker filtering).
-        const pal_buf = self.getBuffer(self.palette.buffer_id) orelse return;
-        const pattern = pal_buf.bytes();
+        const pattern = self.palette.input.bytes();
 
         // Compute filtered+ranked picker items (indices into picker_items, max 32).
         var filtered_buf: [32]usize = undefined;
@@ -694,9 +575,8 @@ pub const Editor = struct {
         }
 
         // Text cursor.
-        const pal_cs = self.getCursorSet(self.palette.cursor_set_id) orelse return;
-        if (pal_cs.len > 0) {
-            const cur_head = pal_cs.iter(&self.cursor_pool)[0].head;
+        {
+            const cur_head = self.palette.input.cursor;
             const cx = pat_x + platform.measureText(pattern[0..cur_head], font_size);
             const cur_y = pal_y + (input_row_h - line_height) / 2;
             try dl.fillRect(.{ .x = cx - 1, .y = cur_y, .w = 2, .h = line_height }, draw.Color.rgb(0, 196, 255));
@@ -719,7 +599,7 @@ pub const Editor = struct {
     /// Insert text for each cursor independently.
     /// Uses strict `> pos` adjustment so overlapping cursors separate rather than
     /// all being bumped to the same post-insertion position.
-    fn insertAtCursors(self: *Editor, win: *Window, cs: *CursorSet, text: []const u8) void {
+    pub fn insertAtCursors(self: *Editor, win: *Window, cs: *BufferView, text: []const u8) void {
         const buf_obj = self.bufOf(win.buffer_id);
         var idx = cs.len;
         while (idx > 0) {
@@ -727,7 +607,6 @@ pub const Editor = struct {
             const items = cs.iter(&self.cursor_pool);
             const pos = items[idx].head;
             buf_obj.insert(pos, text) catch continue;
-            buf_obj.history.recordInsert(self.allocator, pos, text);
             items[idx].head = pos + (idx + 1) * text.len;
             items[idx].anchor = items[idx].head;
         }
@@ -737,15 +616,15 @@ pub const Editor = struct {
 
     const Dir = enum { left, right, up, down };
 
-    fn deleteSelections(self: *Editor, win: *Window, cs: *CursorSet) void {
+    pub fn deleteSelections(self: *Editor, win: *Window, cs: *BufferView) void {
         var it = cs.reverseIter(&self.cursor_pool);
         while (it.next()) |cursor| {
             if (cursor.isSelection())
-                self.bufferDelete(win.buffer_id, cursor.start(), cursor.end() - cursor.start());
+                doDelete(self,win.buffer_id, cursor.start(), cursor.end() - cursor.start());
         }
     }
 
-    fn extendSelection(self: *Editor, win: *Window, cs: *CursorSet, dir: Dir) void {
+    pub fn extendSelection(self: *Editor, win: *Window, cs: *BufferView, dir: Dir) void {
         const buf = self.bufOf(win.buffer_id);
         const content = buf.bytes();
         win.preferred_col = null;
@@ -754,7 +633,7 @@ pub const Editor = struct {
         }
     }
 
-    fn yank(self: *Editor, win: *Window, cs: *CursorSet) void {
+    pub fn yank(self: *Editor, win: *Window, cs: *BufferView) void {
         if (cs.len == 0) return;
         const buf = self.bufOf(win.buffer_id);
         const content = buf.bytes();
@@ -769,7 +648,7 @@ pub const Editor = struct {
         }
     }
 
-    fn delete(self: *Editor, win: *Window, cs: *CursorSet) void {
+    pub fn delete(self: *Editor, win: *Window, cs: *BufferView) void {
         if (cs.len == 0) return;
         const buf = self.bufOf(win.buffer_id);
         const content = buf.bytes();
@@ -781,11 +660,11 @@ pub const Editor = struct {
             const ls = grapheme.lineStart(content, c.head);
             const le = grapheme.findChars(content, c.head, "\n");
             const line_end = if (le < content.len) le + 1 else content.len;
-            self.bufferDelete(win.buffer_id, ls, line_end - ls);
+            doDelete(self,win.buffer_id, ls, line_end - ls);
         }
     }
 
-    fn cut(self: *Editor, win: *Window, cs: *CursorSet) void {
+    pub fn cut(self: *Editor, win: *Window, cs: *BufferView) void {
         if (cs.len == 0) return;
         const buf = self.bufOf(win.buffer_id);
         const content = buf.bytes();
@@ -799,17 +678,17 @@ pub const Editor = struct {
             const le = grapheme.findChars(content, c.head, "\n");
             const line_end = if (le < content.len) le + 1 else content.len;
             platform.writeClipboard(content[ls..line_end]);
-            self.bufferDelete(win.buffer_id, ls, line_end - ls);
+            doDelete(self,win.buffer_id, ls, line_end - ls);
         }
     }
 
-    fn paste(self: *Editor, win: *Window, cs: *CursorSet) void {
+    pub fn paste(self: *Editor, win: *Window, cs: *BufferView) void {
         cs.clearSelections(&self.cursor_pool);
         const clip = platform.readClipboard();
         if (clip.len > 0) self.insertAtCursors(win, cs, clip);
     }
 
-    fn move(self: *Editor, win: *Window, cs: *CursorSet, dir: Dir) void {
+    pub fn move(self: *Editor, win: *Window, cs: *BufferView, dir: Dir) void {
         const buf = self.bufOf(win.buffer_id);
         const content = buf.bytes();
         for (cs.iter(&self.cursor_pool)) |*c| {
@@ -822,14 +701,20 @@ pub const Editor = struct {
                     const ls = grapheme.lineStart(content, c.head);
                     const col_px = win.preferred_col orelse platform.measureText(content[ls..c.head], win.font_size);
                     win.preferred_col = col_px;
-                    c.head = if (dir == .up) cursor_mod.cursorUp(content, c.head, col_px, win.font_size) else cursor_mod.cursorDown(content, c.head, col_px, win.font_size);
+                    const rows = buf.wrap_rows.items;
+                    c.head = if (buf.softwrap)
+                        (if (dir == .up) window_mod.cursorUpWrapped(content, c.head, col_px, win.font_size, rows)
+                                        else window_mod.cursorDownWrapped(content, c.head, col_px, win.font_size, rows))
+                    else
+                        (if (dir == .up) cursor_mod.cursorUp(content, c.head, col_px, win.font_size)
+                                        else cursor_mod.cursorDown(content, c.head, col_px, win.font_size));
                 },
             }
             c.anchor = c.head;
         }
     }
 
-    fn execSneak(self: *Editor, win: *Window, cs: *CursorSet, c1: u8, c2: u8, forward: bool) void {
+    pub fn execSneak(self: *Editor, win: *Window, cs: *BufferView, c1: u8, c2: u8, forward: bool) void {
         if (c1 == 0) return;
         const buf = self.bufOf(win.buffer_id);
         const content = buf.bytes();
@@ -846,7 +731,7 @@ pub const Editor = struct {
         win.preferred_col = null;
     }
 
-    fn applyUndo(self: *Editor, win: *Window, cs: *CursorSet) void {
+    pub fn applyUndo(self: *Editor, win: *Window, cs: *BufferView) void {
         const buf = self.bufOf(win.buffer_id);
         buf.undo(cs, &self.cursor_pool);
         win.preferred_col = null;
@@ -854,7 +739,7 @@ pub const Editor = struct {
         self.highlighters.items[win.buffer_id.index].rehighlight(buf.bytes()) catch {};
     }
 
-    fn applyRedo(self: *Editor, win: *Window, cs: *CursorSet) void {
+    pub fn applyRedo(self: *Editor, win: *Window, cs: *BufferView) void {
         const buf = self.bufOf(win.buffer_id);
         buf.redo(cs, &self.cursor_pool);
         win.preferred_col = null;
@@ -862,7 +747,7 @@ pub const Editor = struct {
         self.highlighters.items[win.buffer_id.index].rehighlight(buf.bytes()) catch {};
     }
 
-    fn applyUndoOlder(self: *Editor, win: *Window, cs: *CursorSet) void {
+    pub fn applyUndoOlder(self: *Editor, win: *Window, cs: *BufferView) void {
         const buf = self.bufOf(win.buffer_id);
         buf.undoOlder(cs, &self.cursor_pool);
         win.preferred_col = null;
@@ -870,7 +755,7 @@ pub const Editor = struct {
         self.highlighters.items[win.buffer_id.index].rehighlight(buf.bytes()) catch {};
     }
 
-    fn applyUndoNewer(self: *Editor, win: *Window, cs: *CursorSet) void {
+    pub fn applyUndoNewer(self: *Editor, win: *Window, cs: *BufferView) void {
         const buf = self.bufOf(win.buffer_id);
         buf.undoNewer(cs, &self.cursor_pool);
         win.preferred_col = null;
@@ -881,868 +766,28 @@ pub const Editor = struct {
     pub fn onKeyDown(self: *Editor, time_ms: f64, key: Key, mods: u32) void {
         self.last_input_ms = time_ms;
         const win = self.getWindow(self.focused_window) orelse return;
-        const cs = self.getCursorSet(win.cursor_set_id) orelse return;
-        switch (win.mode) {
-            .normal => {
-                const normal_buf = self.bufOf(win.buffer_id);
-                normal_buf.history.begin(self.allocator, cs, &self.cursor_pool);
-                defer if (win.mode != .insert) normal_buf.history.commit(self.allocator);
-                var keep_preferred_col = false;
-                defer if (!keep_preferred_col) { win.preferred_col = null; };
-                switch (key) {
-                .escape => { win.pending = .none; },
-                .arrow_left => self.move(win, cs, .left),
-                .arrow_right => self.move(win, cs, .right),
-                .arrow_up => { self.move(win, cs, .up); keep_preferred_col = true; },
-                .arrow_down => { self.move(win, cs, .down); keep_preferred_col = true; },
-                .backspace => {
-                    const buf = self.bufOf(win.buffer_id);
-                    const content = buf.bytes();
-                    if (mods & MOD_SHIFT != 0) {
-                        // delete char after cursor
-                        var it = cs.reverseIter(&self.cursor_pool);
-                        while (it.next()) |cursor| {
-                            const next = cursor_mod.cursorRight(content, cursor.head);
-                            if (next > cursor.head)
-                                self.bufferDelete(win.buffer_id, cursor.head, next - cursor.head);
-                        }
-                    } else {
-                        // delete char before cursor
-                        var it = cs.reverseIter(&self.cursor_pool);
-                        while (it.next()) |cursor| {
-                            const prev = cursor_mod.cursorLeft(content, cursor.head);
-                            if (prev < cursor.head)
-                                self.bufferDelete(win.buffer_id, prev, cursor.head - prev);
-                        }
-                    }
-                },
-                else => if (key.isPrintable()) {
-                    if (win.pending != .none) {
-                        const prev_pending = win.pending;
-                        win.pending = .none;
-                        const buf = self.bufOf(win.buffer_id);
-                        const content = buf.bytes();
-                        switch (prev_pending) {
-                            .none => unreachable,
-                            .ms => {
-                                const pair = cursor_mod.surroundPair(@intCast(@intFromEnum(key)));
-                                var it = cs.reverseIter(&self.cursor_pool);
-                                while (it.next()) |c| {
-                                    const s = c.start();
-                                    const e = c.end();
-                                    self.bufferInsert(win.buffer_id, e, &[_]u8{pair.close}) catch continue;
-                                    self.bufferInsert(win.buffer_id, s, &[_]u8{pair.open}) catch continue;
-                                }
-                            },
-                            .md => {
-                                const ch: u8 = @intCast(@intFromEnum(key));
-                                var it = cs.reverseIter(&self.cursor_pool);
-                                while (it.next()) |c| {
-                                    if (cursor_mod.surroundBounds(content, c.head, ch)) |b| {
-                                        self.bufferDelete(win.buffer_id, b.end, 1);
-                                        self.bufferDelete(win.buffer_id, b.start, 1);
-                                        c.head = b.start;
-                                        c.anchor = b.start;
-                                    }
-                                }
-                            },
-                            .mr1 => {
-                                win.pending = .{ .mr2 = @intCast(@intFromEnum(key)) };
-                            },
-                            .mr2 => |char1| {
-                                const char2: u8 = @intCast(@intFromEnum(key));
-                                const pair2 = cursor_mod.surroundPair(char2);
-                                var it = cs.reverseIter(&self.cursor_pool);
-                                while (it.next()) |c| {
-                                    if (cursor_mod.surroundBounds(content, c.head, char1)) |b| {
-                                        self.bufferDelete(win.buffer_id, b.end, 1);
-                                        self.bufferInsert(win.buffer_id, b.end, &[_]u8{pair2.close}) catch {};
-                                        self.bufferDelete(win.buffer_id, b.start, 1);
-                                        self.bufferInsert(win.buffer_id, b.start, &[_]u8{pair2.open}) catch {};
-                                    }
-                                }
-                            },
-                            .rl => {
-                                const ch: u8 = @intCast(@intFromEnum(key));
-                                var it = cs.reverseIter(&self.cursor_pool);
-                                while (it.next()) |c| {
-                                    const prev = cursor_mod.cursorLeft(content, c.head);
-                                    if (prev < c.head) {
-                                        self.bufferDelete(win.buffer_id, prev, c.head - prev);
-                                        self.bufferInsert(win.buffer_id, prev, &[_]u8{ch}) catch {};
-                                    }
-                                }
-                            },
-                            .rr => {
-                                const ch: u8 = @intCast(@intFromEnum(key));
-                                var it = cs.reverseIter(&self.cursor_pool);
-                                while (it.next()) |c| {
-                                    const next = cursor_mod.cursorRight(content, c.head);
-                                    if (next > c.head) {
-                                        self.bufferInsert(win.buffer_id, next, &[_]u8{ch}) catch {};
-                                        self.bufferDelete(win.buffer_id, c.head, next - c.head);
-                                    }
-                                }
-                            },
-                            .sf1 => |forward| {
-                                win.pending = .{ .sf2 = .{ .forward = forward, .c1 = @intCast(@intFromEnum(key)) } };
-                            },
-                            .sf2 => |state| {
-                                const c2: u8 = @intCast(@intFromEnum(key));
-                                win.sneak_c1 = state.c1;
-                                win.sneak_c2 = c2;
-                                win.sneak_forward = state.forward;
-                                win.last_cmd = if (state.forward) 'f' else 'F';
-                                self.execSneak(win, cs, state.c1, c2, state.forward);
-                            },
-                            .prefix => |pending| switch (pending) {
-                            'g' => switch (@intFromEnum(key)) {
-                                'k' => {
-                                    const first_line_end = grapheme.findChars(content, 0, "\n");
-                                    for (cs.iter(&self.cursor_pool)) |*c| {
-                                        const ls = grapheme.lineStart(content, c.head);
-                                        const col_px = win.preferred_col orelse platform.measureText(content[ls..c.head], win.font_size);
-                                        win.preferred_col = col_px;
-                                        c.head = cursor_mod.closestPosToX(content, 0, first_line_end, col_px, win.font_size);
-                                        c.anchor = c.head;
-                                    }
-                                    keep_preferred_col = true;
-                                },
-                                'j' => {
-                                    var last_ls: usize = 0;
-                                    for (content, 0..) |ch, i| {
-                                        if (ch == '\n') last_ls = i + 1;
-                                    }
-                                    for (cs.iter(&self.cursor_pool)) |*c| {
-                                        const ls = grapheme.lineStart(content, c.head);
-                                        const col_px = win.preferred_col orelse platform.measureText(content[ls..c.head], win.font_size);
-                                        win.preferred_col = col_px;
-                                        c.head = cursor_mod.closestPosToX(content, last_ls, content.len, col_px, win.font_size);
-                                        c.anchor = c.head;
-                                    }
-                                    keep_preferred_col = true;
-                                },
-                                'h' => {
-                                    platform.openUrl("https://jason.pub/chop-editor-zig/keyboard-guide.html");
-                                },
-                                else => {},
-                            },
-                            'a' => switch (@intFromEnum(key)) {
-                                'w' => {
-                                    for (cs.iter(&self.cursor_pool)) |*c| {
-                                        if (cursor_mod.wordBoundsAt(content, c.head)) |wb| {
-                                            c.anchor = wb.start;
-                                            c.head = wb.end;
-                                        }
-                                    }
-                                },
-                                '\'' => {
-                                    for (cs.iter(&self.cursor_pool)) |*c| {
-                                        if (cursor_mod.quoteBounds(content, c.head, '\'')) |qb| {
-                                            c.anchor = qb.start + 1;
-                                            c.head = qb.end;
-                                        }
-                                    }
-                                },
-                                '(', ')' => {
-                                    for (cs.iter(&self.cursor_pool)) |*c| {
-                                        if (cursor_mod.parenBounds(content, c.head, '(', ')')) |pb| {
-                                            c.anchor = pb.start + 1;
-                                            c.head = pb.end;
-                                        }
-                                    }
-                                },
-                                'p' => {
-                                    for (cs.iter(&self.cursor_pool)) |*c| {
-                                        // seek backward past non-blank lines to paragraph start
-                                        var s = grapheme.lineStart(content, c.head);
-                                        while (s > 0) {
-                                            const prev_le = s - 1;
-                                            const prev_ls = grapheme.lineStart(content, prev_le);
-                                            if (prev_ls == prev_le) break; // blank line
-                                            s = prev_ls;
-                                        }
-                                        // seek forward past non-blank lines to paragraph end
-                                        var e = c.head;
-                                        while (e < content.len) {
-                                            const le = grapheme.findChars(content, e, "\n");
-                                            if (le == grapheme.lineStart(content, e)) break; // blank line
-                                            e = if (le < content.len) le + 1 else content.len;
-                                        }
-                                        c.anchor = s;
-                                        c.head = e;
-                                    }
-                                },
-                                'e' => {
-                                    if (cs.len > 0) {
-                                        const items = cs.iter(&self.cursor_pool);
-                                        items[0].anchor = 0;
-                                        items[0].head = content.len;
-                                        cs.len = 1;
-                                    }
-                                },
-                                else => {},
-                            },
-                            'A' => switch (@intFromEnum(key)) {
-                                '\'' => {
-                                    for (cs.iter(&self.cursor_pool)) |*c| {
-                                        if (cursor_mod.quoteBounds(content, c.head, '\'')) |qb| {
-                                            c.anchor = qb.start;
-                                            c.head = qb.end + 1;
-                                        }
-                                    }
-                                },
-                                else => {},
-                            },
-                            'C' => switch (@intFromEnum(key)) {
-                                'd' => {
-                                    if (cs.len > 1) cs.len = 1;
-                                },
-                                'v' => {
-                                    for (cs.iter(&self.cursor_pool)) |*c| {
-                                        c.anchor = c.head;
-                                    }
-                                },
-                                'c' => {
-                                    for (cs.iter(&self.cursor_pool)) |*c| {
-                                        const tmp = c.head;
-                                        c.head = c.anchor;
-                                        c.anchor = tmp;
-                                    }
-                                },
-                                'C' => {
-                                    for (cs.iter(&self.cursor_pool)) |*c| {
-                                        if (c.head > c.anchor) {
-                                            const tmp = c.head;
-                                            c.head = c.anchor;
-                                            c.anchor = tmp;
-                                        }
-                                    }
-                                },
-                                else => {},
-                            },
-                            '"' => switch (@intFromEnum(key)) {
-                                'j' => {
-                                    const items = cs.iter(&self.cursor_pool);
-                                    const ls = grapheme.lineStart(content, items[0].head);
-                                    const col_px = win.preferred_col orelse platform.measureText(content[ls..items[0].head], win.font_size);
-                                    win.preferred_col = col_px;
-                                    for (items) |*c| {
-                                        c.head = cursor_mod.cursorDown(content, c.head, col_px, win.font_size);
-                                    }
-                                    keep_preferred_col = true;
-                                },
-                                'k' => {
-                                    const items = cs.iter(&self.cursor_pool);
-                                    const ls = grapheme.lineStart(content, items[0].head);
-                                    const col_px = win.preferred_col orelse platform.measureText(content[ls..items[0].head], win.font_size);
-                                    win.preferred_col = col_px;
-                                    for (items) |*c| {
-                                        c.head = cursor_mod.cursorUp(content, c.head, col_px, win.font_size);
-                                    }
-                                    keep_preferred_col = true;
-                                },
-                                else => {},
-                            },
-                            else => {},
-                            'm' => switch (@intFromEnum(key)) {
-                                's' => { win.pending = .ms; },
-                                'd' => { win.pending = .md; },
-                                'r' => { win.pending = .mr1; },
-                                else => {},
-                            },
-                        },
-                    }
-                    } else {
-                    const prev_cmd = win.last_cmd;
-                    win.last_cmd = @intCast(@intFromEnum(key));
-                    switch (@intFromEnum(key)) {
-                    'H' => self.extendSelection(win, cs, .left),
-                    'L' => self.extendSelection(win, cs, .right),
-                    '[' => {
-                        const buf = self.bufOf(win.buffer_id);
-                        const content = buf.bytes();
-                        for (cs.iter(&self.cursor_pool)) |*c| {
-                            c.head = grapheme.lineStart(content, c.head);
-                            c.anchor = c.head;
-                        }
-                    },
-                    ']' => {
-                        const buf = self.bufOf(win.buffer_id);
-                        const content = buf.bytes();
-                        for (cs.iter(&self.cursor_pool)) |*c| {
-                            c.head = grapheme.findChars(content, c.head, "\n");
-                            c.anchor = c.head;
-                        }
-                    },
-                    '{' => {
-                        const buf = self.bufOf(win.buffer_id);
-                        const content = buf.bytes();
-                        for (cs.iter(&self.cursor_pool)) |*c| {
-                            c.head = grapheme.lineStart(content, c.head);
-                        }
-                    },
-                    '}' => {
-                        const buf = self.bufOf(win.buffer_id);
-                        const content = buf.bytes();
-                        for (cs.iter(&self.cursor_pool)) |*c| {
-                            c.head = grapheme.findChars(content, c.head, "\n");
-                        }
-                    },
-                    'x' => {
-                        const buf = self.bufOf(win.buffer_id);
-                        const content = buf.bytes();
-                        for (cs.iter(&self.cursor_pool)) |*c| {
-                            if (grapheme.lineStart(content, c.head) == grapheme.lineStart(content, c.anchor)) {
-                                c.anchor = grapheme.lineStart(content, c.head);
-                            }
-                            const le = grapheme.findChars(content, c.head, "\n");
-                            c.head = if (le < content.len) le + 1 else content.len;
-                        }
-                    },
-                    'X' => {
-                        const buf = self.bufOf(win.buffer_id);
-                        const content = buf.bytes();
-                        for (cs.iter(&self.cursor_pool)) |*c| {
-                            if (grapheme.lineStart(content, c.head) == grapheme.lineStart(content, c.anchor)) {
-                                c.anchor = grapheme.findChars(content, c.head, "\n");
-                            }
-                            const cur_ls = grapheme.lineStart(content, c.head);
-                            c.head = if (cur_ls > 0) cur_ls - 1 else 0;
-                        }
-                    },
-                    'h' => {
-                        if (cs.hasSelection(&self.cursor_pool)) {
-                            cs.collapseToStart(&self.cursor_pool);
-                        } else self.move(win, cs, .left);
-                    },
-                    'l' => {
-                        if (cs.hasSelection(&self.cursor_pool)) {
-                            cs.collapseToEnd(&self.cursor_pool);
-                        } else self.move(win, cs, .right);
-                    },
-                    'k' => {
-                        if (mods & MOD_ALT != 0) {
-                            // Move line up
-                            const buf = self.bufOf(win.buffer_id);
-                            for (cs.iter(&self.cursor_pool)) |*c| {
-                                const content = buf.bytes();
-                                const ls = grapheme.lineStart(content, c.head);
-                                if (ls == 0) continue;
-                                const prev_le = ls - 1;
-                                const prev_ls = grapheme.lineStart(content, prev_le);
-                                const le = grapheme.findChars(content, c.head, "\n");
-                                const col_offset = c.head - ls;
-                                const la_len = le - ls;
-                                const lb_len = prev_le - prev_ls;
-                                if (la_len > 4096 or lb_len > 4096) continue;
-                                var line_a: [4096]u8 = undefined;
-                                var line_b: [4096]u8 = undefined;
-                                @memcpy(line_a[0..la_len], content[ls..le]);
-                                @memcpy(line_b[0..lb_len], content[prev_ls..prev_le]);
-                                self.bufferDelete(win.buffer_id, prev_ls, le - prev_ls);
-                                self.bufferInsert(win.buffer_id, prev_ls, line_a[0..la_len]) catch {};
-                                self.bufferInsert(win.buffer_id, prev_ls + la_len, "\n") catch {};
-                                self.bufferInsert(win.buffer_id, prev_ls + la_len + 1, line_b[0..lb_len]) catch {};
-                                c.head = prev_ls + @min(col_offset, la_len);
-                                c.anchor = c.head;
-                            }
-                        } else {
-                            cs.clearSelections(&self.cursor_pool);
-                            self.move(win, cs, .up);
-                            keep_preferred_col = true;
-                        }
-                    },
-                    'J' => {
-                        if (mods & MOD_ALT != 0) {
-                            // Subtract bottom (last) cursor
-                            if (cs.len > 1) cs.len -= 1;
-                        } else {
-                            if (cs.len == 0) return;
-                            const buf = self.bufOf(win.buffer_id);
-                            const content = buf.bytes();
-                            const items = cs.iter(&self.cursor_pool);
-                            const last = items[cs.len - 1];
-                            const ls = grapheme.lineStart(content, last.head);
-                            const col_px = win.preferred_col orelse platform.measureText(content[ls..last.head], win.font_size);
-                            win.preferred_col = col_px;
-                            const new_head = cursor_mod.cursorDown(content, last.head, col_px, win.font_size);
-                            if (new_head != last.head) {
-                                cs.insert(&self.cursor_pool, .{ .head = new_head, .anchor = new_head }) catch {};
-                            }
-                            keep_preferred_col = true;
-                        }
-                    },
-                    'K' => {
-                        if (mods & MOD_ALT != 0) {
-                            // Subtract top (first) cursor
-                            if (cs.len > 1) {
-                                const all = self.cursor_pool.slice(cs.start, cs.len);
-                                var i: u32 = 0;
-                                while (i < cs.len - 1) : (i += 1) all[i] = all[i + 1];
-                                cs.len -= 1;
-                            }
-                        } else {
-                            if (cs.len == 0) return;
-                            const buf = self.bufOf(win.buffer_id);
-                            const content = buf.bytes();
-                            const first = cs.iter(&self.cursor_pool)[0];
-                            const ls = grapheme.lineStart(content, first.head);
-                            const col_px = win.preferred_col orelse platform.measureText(content[ls..first.head], win.font_size);
-                            win.preferred_col = col_px;
-                            const new_head = cursor_mod.cursorUp(content, first.head, col_px, win.font_size);
-                            if (new_head != first.head) {
-                                cs.insert(&self.cursor_pool, .{ .head = new_head, .anchor = new_head }) catch {};
-                            }
-                            keep_preferred_col = true;
-                        }
-                    },
-                    'j' => {
-                        if (mods & MOD_ALT != 0) {
-                            // Move line down
-                            const buf = self.bufOf(win.buffer_id);
-                            var it = cs.reverseIter(&self.cursor_pool);
-                            while (it.next()) |c| {
-                                const content = buf.bytes();
-                                const ls = grapheme.lineStart(content, c.head);
-                                const le = grapheme.findChars(content, c.head, "\n");
-                                if (le >= content.len) continue;
-                                const next_ls = le + 1;
-                                const next_le = grapheme.findChars(content, next_ls, "\n");
-                                const col_offset = c.head - ls;
-                                const la_len = le - ls;
-                                const lb_len = next_le - next_ls;
-                                if (la_len > 4096 or lb_len > 4096) continue;
-                                var line_a: [4096]u8 = undefined;
-                                var line_b: [4096]u8 = undefined;
-                                @memcpy(line_a[0..la_len], content[ls..le]);
-                                @memcpy(line_b[0..lb_len], content[next_ls..next_le]);
-                                self.bufferDelete(win.buffer_id, ls, next_le - ls);
-                                self.bufferInsert(win.buffer_id, ls, line_b[0..lb_len]) catch {};
-                                self.bufferInsert(win.buffer_id, ls + lb_len, "\n") catch {};
-                                self.bufferInsert(win.buffer_id, ls + lb_len + 1, line_a[0..la_len]) catch {};
-                                c.head = ls + lb_len + 1 + @min(col_offset, la_len);
-                                c.anchor = c.head;
-                            }
-                        } else {
-                            cs.clearSelections(&self.cursor_pool);
-                            self.move(win, cs, .down);
-                            keep_preferred_col = true;
-                        }
-                    },
-                    'w' => {
-                        const buf = self.bufOf(win.buffer_id);
-                        const content = buf.bytes();
-                        for (cs.iter(&self.cursor_pool)) |*c| {
-                            c.head = cursor_mod.wordNext(content, c.head);
-                            c.anchor = c.head;
-                        }
-                    },
-                    'W' => {
-                        const buf = self.bufOf(win.buffer_id);
-                        const content = buf.bytes();
-                        for (cs.iter(&self.cursor_pool)) |*c| {
-                            c.head = cursor_mod.wordNext(content, c.head);
-                        }
-                    },
-                    'b' => {
-                        const buf = self.bufOf(win.buffer_id);
-                        const content = buf.bytes();
-                        for (cs.iter(&self.cursor_pool)) |*c| {
-                            c.head = cursor_mod.wordPrev(content, c.head);
-                            c.anchor = c.head;
-                        }
-                    },
-                    'B' => {
-                        const buf = self.bufOf(win.buffer_id);
-                        const content = buf.bytes();
-                        for (cs.iter(&self.cursor_pool)) |*c| {
-                            c.head = cursor_mod.wordPrev(content, c.head);
-                        }
-                    },
-                    'i' => {
-                        for (cs.iter(&self.cursor_pool)) |*c| { c.anchor = c.head; }
-                        win.mode = .insert;
-                    },
-                    'I' => {
-                        const buf = self.bufOf(win.buffer_id);
-                        const content = buf.bytes();
-                        for (cs.iter(&self.cursor_pool)) |*c| {
-                            c.head = grapheme.lineStart(content, c.head);
-                            c.anchor = c.head;
-                        }
-                        win.mode = .insert;
-                    },
-                    '/' => self.op_queue.push(self.allocator, .{ .search_forward = null }),
-                    '?' => self.op_queue.push(self.allocator, .{ .search_backward = null }),
-                    's' => self.op_queue.push(self.allocator, .{ .split_selections = null }),
-                    'S' => self.op_queue.push(self.allocator, .{ .split_selections_complement = null }),
-                    'v' => self.op_queue.push(self.allocator, .{ .filter_keep = null }),
-                    'V' => self.op_queue.push(self.allocator, .{ .filter_drop = null }),
-                    'n' => {
-                        self.requireFreshMatches();
-                        if (self.palette.matches.items.len == 0 or cs.len == 0) return;
-                        const m = findNextMatchFrom(self.palette.matches.items, cs.iter(&self.cursor_pool)[cs.len - 1].end()) orelse return;
-                        cs.clear();
-                        cs.insert(&self.cursor_pool, .{ .head = m.end, .anchor = m.start }) catch {};
-                    },
-                    'N' => {
-                        self.requireFreshMatches();
-                        if (self.palette.matches.items.len == 0 or cs.len == 0) return;
-                        const m = findNextMatchFrom(self.palette.matches.items, cs.iter(&self.cursor_pool)[cs.len - 1].end()) orelse return;
-                        cs.insert(&self.cursor_pool, .{ .head = m.end, .anchor = m.start }) catch {};
-                    },
-                    'p' => {
-                        self.requireFreshMatches();
-                        if (self.palette.matches.items.len == 0 or cs.len == 0) return;
-                        const m = findPrevMatchFrom(self.palette.matches.items, cs.iter(&self.cursor_pool)[0].start()) orelse return;
-                        cs.clear();
-                        cs.insert(&self.cursor_pool, .{ .head = m.end, .anchor = m.start }) catch {};
-                    },
-                    'P' => {
-                        self.requireFreshMatches();
-                        if (self.palette.matches.items.len == 0 or cs.len == 0) return;
-                        const m = findPrevMatchFrom(self.palette.matches.items, cs.iter(&self.cursor_pool)[0].start()) orelse return;
-                        cs.insert(&self.cursor_pool, .{ .head = m.end, .anchor = m.start }) catch {};
-                    },
-                    '*' => {
-                        if (cs.len == 0) return;
-                        self.requireFreshMatches();
-                        const buf = self.bufOf(win.buffer_id);
-                        const content = buf.bytes();
-                        if (self.palette.matches.items.len == 0) {
-                            const c0 = cs.iter(&self.cursor_pool)[0];
-                            const term: ?[]const u8 = if (c0.isSelection())
-                                content[c0.start()..c0.end()]
-                            else if (cursor_mod.wordBoundsAt(content, c0.head)) |wb|
-                                content[wb.start..wb.end]
-                            else
-                                null;
-                            if (term) |word| {
-                                const pal_buf = self.getBuffer(self.palette.buffer_id) orelse return;
-                                if (pal_buf.len() > 0) self.bufferDelete(self.palette.buffer_id, 0, pal_buf.len());
-                                self.bufferInsert(self.palette.buffer_id, 0, word) catch return;
-                                const pal_cs = self.getCursorSet(self.palette.cursor_set_id) orelse return;
-                                if (pal_cs.len > 0) {
-                                    pal_cs.iter(&self.cursor_pool)[0].head = word.len;
-                                    pal_cs.iter(&self.cursor_pool)[0].anchor = word.len;
-                                }
-                                self.updateMatches() catch return;
-                            }
-                        }
-                        if (self.palette.matches.items.len > 0) {
-                            cs.clear();
-                            for (self.palette.matches.items) |m| {
-                                cs.insert(&self.cursor_pool, .{ .head = m.end, .anchor = m.start }) catch break;
-                            }
-                        }
-                    },
-                    'o' => {
-                        if (cs.len == 0) return;
-                        const buf = self.bufOf(win.buffer_id);
-                        var it = cs.reverseIter(&self.cursor_pool);
-                        while (it.next()) |c| {
-                            const line_end = grapheme.findChars(buf.bytes(), c.head, "\n");
-                            self.bufferInsert(win.buffer_id, line_end, "\n") catch continue;
-                            c.head = line_end + 1;
-                            c.anchor = c.head;
-                        }
-                        win.mode = .insert;
-                    },
-                    'O' => {
-                        if (cs.len == 0) return;
-                        const buf = self.bufOf(win.buffer_id);
-                        var it = cs.reverseIter(&self.cursor_pool);
-                        while (it.next()) |c| {
-                            const line_start = grapheme.lineStart(buf.bytes(), c.head);
-                            self.bufferInsert(win.buffer_id, line_start, "\n") catch continue;
-                            c.head = line_start;
-                            c.anchor = c.head;
-                        }
-                        win.mode = .insert;
-                    },
-                    'd' => self.delete(win, cs),
-                    'D' => {
-                        if (cs.len == 0) return;
-                        const buf = self.bufOf(win.buffer_id);
-                        // Collect line ranges from current content, then merge overlapping.
-                        const content = buf.bytes();
-                        const Range = struct { start: usize, end: usize };
-                        var ranges: [MAX_CURSORS]Range = undefined;
-                        for (cs.iter(&self.cursor_pool), 0..) |c, i| {
-                            const ls = grapheme.lineStart(content, c.start());
-                            const le = grapheme.findChars(content, c.end(), "\n");
-                            ranges[i] = .{
-                                .start = ls,
-                                .end = if (le < content.len) le + 1 else content.len,
-                            };
-                        }
-                        // Merge (cursors are sorted so ranges are in order).
-                        var merged: [MAX_CURSORS]Range = undefined;
-                        var n: usize = 0;
-                        for (ranges[0..cs.len]) |r| {
-                            if (n > 0 and r.start <= merged[n - 1].end) {
-                                merged[n - 1].end = @max(merged[n - 1].end, r.end);
-                            } else {
-                                merged[n] = r;
-                                n += 1;
-                            }
-                        }
-                        // Delete in reverse order so positions stay valid.
-                        var i = n;
-                        while (i > 0) {
-                            i -= 1;
-                            self.bufferDelete(win.buffer_id, merged[i].start, merged[i].end - merged[i].start);
-                        }
-                    },
-                    'y' => self.yank(win, cs),
-                    'Y' => self.paste(win, cs),
-                    '&' => {
-                        if (cs.len == 0) return;
-                        const buf = self.bufOf(win.buffer_id);
-                        if (mods & MOD_ALT != 0) {
-                            // Duplicate before: insert a copy before each selection;
-                            // cursor auto-adjusts to stay on the original (now shifted) text.
-                            var it = cs.reverseIter(&self.cursor_pool);
-                            while (it.next()) |c| {
-                                if (!c.isSelection()) continue;
-                                const content = buf.bytes();
-                                const sel_start = c.start();
-                                const sel_end = c.end();
-                                const copy = self.allocator.dupe(u8, content[sel_start..sel_end]) catch continue;
-                                defer self.allocator.free(copy);
-                                self.bufferInsert(win.buffer_id, sel_start, copy) catch {};
-                            }
-                        } else {
-                            // Duplicate after: insert a copy after each selection;
-                            // restore cursor so it keeps selecting the original text.
-                            var it = cs.reverseIter(&self.cursor_pool);
-                            while (it.next()) |c| {
-                                if (!c.isSelection()) continue;
-                                const content = buf.bytes();
-                                const sel_start = c.start();
-                                const sel_end = c.end();
-                                const copy = self.allocator.dupe(u8, content[sel_start..sel_end]) catch continue;
-                                defer self.allocator.free(copy);
-                                const orig_head = c.head;
-                                const orig_anchor = c.anchor;
-                                self.bufferInsert(win.buffer_id, sel_end, copy) catch {};
-                                c.head = orig_head;
-                                c.anchor = orig_anchor;
-                            }
-                        }
-                    },
-                    '\'' => {
-                        const buf = self.bufOf(win.buffer_id);
-                        const content = buf.bytes();
-                        for (cs.iter(&self.cursor_pool)) |*c| {
-                            c.head = grapheme.findChars(content, c.head, "\n");
-                            c.anchor = c.head;
-                        }
-                        win.mode = .insert;
-                    },
-                    'u' => if (mods & MOD_ALT != 0) self.applyUndoOlder(win, cs)
-                           else self.applyUndo(win, cs),
-                    'U' => if (mods & MOD_ALT != 0) self.applyUndoNewer(win, cs)
-                           else self.applyRedo(win, cs),
-                    'r' => { win.pending = .rl; },
-                    'R' => { win.pending = .rr; },
-                    'f' => if (prev_cmd == 'f' or prev_cmd == 'F')
-                        self.execSneak(win, cs, win.sneak_c1, win.sneak_c2, win.sneak_forward)
-                    else
-                        { win.pending = .{ .sf1 = true }; },
-                    'F' => if (prev_cmd == 'f' or prev_cmd == 'F')
-                        self.execSneak(win, cs, win.sneak_c1, win.sneak_c2, !win.sneak_forward)
-                    else
-                        { win.pending = .{ .sf1 = false }; },
-                    't' => {
-                        const buf = self.bufOf(win.buffer_id);
-                        const content = buf.bytes();
-                        var it = cs.reverseIter(&self.cursor_pool);
-                        while (it.next()) |c| {
-                            const prev = cursor_mod.cursorLeft(content, c.head);
-                            const next = cursor_mod.cursorRight(content, c.head);
-                            if (prev < c.head and next > c.head) {
-                                const left_len = c.head - prev;
-                                const right_len = next - c.head;
-                                var left_copy: [32]u8 = undefined;
-                                var right_copy: [32]u8 = undefined;
-                                @memcpy(left_copy[0..left_len], content[prev..c.head]);
-                                @memcpy(right_copy[0..right_len], content[c.head..next]);
-                                self.bufferDelete(win.buffer_id, prev, left_len + right_len);
-                                self.bufferInsert(win.buffer_id, prev, right_copy[0..right_len]) catch {};
-                                self.bufferInsert(win.buffer_id, prev + right_len, left_copy[0..left_len]) catch {};
-                                c.head = cursor_mod.cursorLeft(content, c.head);
-                                c.anchor = c.head;
-                            }
-                        }
-                    },
-                    'T' => {
-                        const buf = self.bufOf(win.buffer_id);
-                        const content = buf.bytes();
-                        var it = cs.reverseIter(&self.cursor_pool);
-                        while (it.next()) |c| {
-                            // Find left word end, then start
-                            if (c.head == 0 or (cursor_mod.isWordChar(content[c.head]) and cursor_mod.isWordChar(content[c.head-1]))) continue;
-                            var lend = c.head;
-                            while (lend > 0 and !cursor_mod.isWordChar(content[lend - 1])) lend -= 1;
-                            if (lend == 0) continue;
-                            var lstart = lend;
-                            while (lstart > 0 and cursor_mod.isWordChar(content[lstart - 1])) lstart -= 1;
-                            // Find right word start, then end
-                            var rstart = c.head;
-                            while (rstart < content.len and !cursor_mod.isWordChar(content[rstart])) rstart += 1;
-                            if (rstart >= content.len) continue;
-                            var rend = rstart + 1;
-                            while (rend < content.len and cursor_mod.isWordChar(content[rend])) rend += 1;
-                            // Words must not overlap
-                            if (lend > rstart) continue;
-                            const lword_len = lend - lstart;
-                            const rword_len = rend - rstart;
-                            const affected_len = rend - lstart;
-                            if (affected_len > 256) continue;
-                            var affected: [256]u8 = undefined;
-                            @memcpy(affected[0..affected_len], content[lstart..rend]);
-                            // Replace in reverse order to preserve offsets
-                            const prev_head = c.head;
-                            self.bufferDelete(win.buffer_id, lstart, affected_len);
-                            self.bufferInsert(win.buffer_id, lstart, affected[0..lword_len]) catch {};
-                            self.bufferInsert(win.buffer_id, lstart, affected[lend-lstart..rstart-lstart]) catch {};
-                            self.bufferInsert(win.buffer_id, lstart, affected[rstart-lstart..rend-lstart]) catch {};
-                            c.head = (prev_head + rword_len) - lword_len;
-                            c.anchor = c.head;
-                        }
-                    },
-                    ';' => { for (cs.iter(&self.cursor_pool)) |*c| { c.anchor = c.head; } }, // cv: collapse selections
-                    ':' => { if (cs.len > 1) cs.len = 1; }, // drop to single cursor
-                    ' ' => self.op_queue.push(self.allocator, .settings_palette),
-                    'g', 'C', 'a', 'A', '"' => { win.pending = .{ .prefix = @intCast(@intFromEnum(key)) }; },
-                    'c' => self.cut(win, cs),
-                    'm' => { win.pending = .{ .prefix = 'm' }; },
-                    else => {},
-                    } // end single-key switch
-                    } // end sneak-save else block
-                }, // end pending_key else / isPrintable block
-                } // end switch(key)
-            },
-            .insert => switch (key) {
-                .escape => {
-                    self.bufOf(win.buffer_id).history.commit(self.allocator);
-                    win.mode = .normal;
-                },
-                .arrow_left => self.move(win, cs, .left),
-                .arrow_right => self.move(win, cs, .right),
-                .arrow_up => self.move(win, cs, .up),
-                .arrow_down => self.move(win, cs, .down),
-                .backspace => {
-                    win.preferred_col = null;
-                    var it = cs.reverseIter(&self.cursor_pool);
-                    while (it.next()) |cursor| {
-                        if (cursor.head > 0)
-                            self.bufferDelete(win.buffer_id, cursor.head - 1, 1);
-                    }
-                },
-                .enter => {
-                    win.preferred_col = null;
-                    self.insertAtCursors(win, cs, "\n");
-                },
-                .tab => {
-                    win.preferred_col = null;
-                    const spaces = "        "[0..self.tab_width];
-                    self.insertAtCursors(win, cs, spaces);
-                },
-                else => if (key.isPrintable() and mods & MOD_CTRL != 0 and @intFromEnum(key) == 'y') {
-                    win.preferred_col = null;
-                    self.paste(win, cs);
-                } else if (key.isPrintable() and mods & MOD_CTRL != 0 and @intFromEnum(key) == 'w') {
-                    win.preferred_col = null;
-                    const buf = self.bufOf(win.buffer_id);
-                    const content = buf.bytes();
-                    var it = cs.reverseIter(&self.cursor_pool);
-                    while (it.next()) |cursor| {
-                        const prev = cursor_mod.wordPrev(content, cursor.head);
-                        if (prev < cursor.head)
-                            self.bufferDelete(win.buffer_id, prev, cursor.head - prev);
-                    }
-                } else if (key.isPrintable()) {
-                    win.preferred_col = null;
-                    var encoded: [4]u8 = undefined;
-                    const cp: u21 = @intCast(@intFromEnum(key));
-                    const byte_len = std.unicode.utf8Encode(cp, &encoded) catch return;
-                    self.insertAtCursors(win, cs, encoded[0..byte_len]);
-                },
-            },
-            .command => {
-                const pal_cs = self.getCursorSet(self.palette.cursor_set_id) orelse return;
-                switch (key) {
-                    .escape => self.closePalette(false),
-                    .enter => self.closePalette(true),
-                    .backspace => {
-                        if (pal_cs.len > 0 and pal_cs.iter(&self.cursor_pool)[0].head > 0) {
-                            self.bufferDelete(self.palette.buffer_id, pal_cs.iter(&self.cursor_pool)[0].head - 1, 1);
-                            self.palette.picker_selected = 0;
-                            if (self.palette.active) |config| {
-                                if (config.preview == .search_highlights) {
-                                    const pal_buf = self.getBuffer(self.palette.buffer_id) orelse return;
-                                    self.op_queue.push(self.allocator, .{ .preview = .{
-                                        .intent = config.op_kind,
-                                        .text = pal_buf.bytes(),
-                                    }});
-                                }
-                            }
-                        }
-                    },
-                    .arrow_up => {
-                        if (self.palette.picker_selected > 0)
-                            self.palette.picker_selected -= 1;
-                    },
-                    .arrow_down => {
-                        // Count how many items pass the current filter.
-                        const pal_buf_d = self.getBuffer(self.palette.buffer_id) orelse return;
-                        const pat_d = pal_buf_d.bytes();
-                        var filtered_count: usize = 0;
-                        for (self.palette.picker_items) |item| {
-                            if (palette_mod.scoreMatch(pat_d, item.label).tier != 255)
-                                filtered_count += 1;
-                        }
-                        if (filtered_count > 0 and self.palette.picker_selected + 1 < filtered_count)
-                            self.palette.picker_selected += 1;
-                    },
-                    .arrow_left => {
-                        if (pal_cs.len > 0 and pal_cs.iter(&self.cursor_pool)[0].head > 0) {
-                            pal_cs.iter(&self.cursor_pool)[0].head -= 1;
-                            pal_cs.iter(&self.cursor_pool)[0].anchor = pal_cs.iter(&self.cursor_pool)[0].head;
-                        }
-                    },
-                    .arrow_right => {
-                        const pal_buf = self.getBuffer(self.palette.buffer_id) orelse return;
-                        if (pal_cs.len > 0 and pal_cs.iter(&self.cursor_pool)[0].head < pal_buf.len()) {
-                            pal_cs.iter(&self.cursor_pool)[0].head += 1;
-                            pal_cs.iter(&self.cursor_pool)[0].anchor = pal_cs.iter(&self.cursor_pool)[0].head;
-                        }
-                    },
-                    else => if (key.isPrintable()) {
-                        var encoded: [4]u8 = undefined;
-                        const cp: u21 = @intCast(@intFromEnum(key));
-                        const byte_len = std.unicode.utf8Encode(cp, &encoded) catch return;
-                        if (pal_cs.len > 0) {
-                            self.bufferInsert(self.palette.buffer_id, pal_cs.iter(&self.cursor_pool)[0].head, encoded[0..byte_len]) catch return;
-                            self.palette.picker_selected = 0;
-                            if (self.palette.active) |config| {
-                                if (config.preview == .search_highlights) {
-                                    const pal_buf = self.getBuffer(self.palette.buffer_id) orelse return;
-                                    self.op_queue.push(self.allocator, .{ .preview = .{
-                                        .intent = config.op_kind,
-                                        .text = pal_buf.bytes(),
-                                    }});
-                                }
-                            }
-                        }
-                    },
-                }
-            },
+        const chord = keybinds.keyChord(key, mods);
+
+        const was_normal = win.mode == .normal;
+        if (was_normal) {
+            const cs = self.getBufferView(win.buffer_view_id) orelse return;
+            self.bufOf(win.buffer_id).history.begin(self.allocator, cs, &self.cursor_pool);
         }
-        self.processOps();
+        defer if (was_normal and win.mode != .insert) self.bufOf(win.buffer_id).history.commit(self.allocator);
+
+        if (win.pending_key_handler) |handler| {
+            win.pending_key_handler = null;
+            win.preferred_col = null;
+            handler(self, chord);
+        } else {
+            const table = self.key_tables.get(win.mode);
+            if (table.get(chord)) |action| {
+                action(self, chord);
+            } else if (table.default_action) |default| {
+                default(self, chord);
+            }
+        }
+
     }
 
     pub fn onKeyUp(self: *Editor, key: Key, mods: u32) void {
@@ -1754,7 +799,7 @@ pub const Editor = struct {
     pub fn onMouse(self: *Editor, x: f32, y: f32, button: u8, kind: u8, mods: u32) void {
         const win = self.getWindow(self.focused_window) orelse return;
         const buf = self.getBuffer(win.buffer_id) orelse return;
-        const cs = self.getCursorSet(win.cursor_set_id) orelse return;
+        const cs = self.getBufferView(win.buffer_view_id) orelse return;
 
         // When palette is open, intercept all mouse events.
         if (win.mode == .command and self.palette.active != null) {
@@ -1772,17 +817,12 @@ pub const Editor = struct {
                     self.closePalette(false);
                 } else if (y < pal_y + input_row_h) {
                     // Click on input row: place palette cursor at clicked position.
-                    const pal_buf = self.getBuffer(self.palette.buffer_id) orelse return;
-                    const pal_cs = self.getCursorSet(self.palette.cursor_set_id) orelse return;
-                    const pattern = pal_buf.bytes();
+                    const pattern = self.palette.input.bytes();
                     const prompt = self.palette.promptSymbol();
                     const text_x = pal_x + 14;
                     const pat_x = text_x + platform.measureText(prompt, font_size) + 6;
                     const pos = cursor_mod.closestPosToX(pattern, 0, pattern.len, x - pat_x, font_size);
-                    if (pal_cs.len > 0) {
-                        pal_cs.iter(&self.cursor_pool)[0].head = pos;
-                        pal_cs.iter(&self.cursor_pool)[0].anchor = pos;
-                    }
+                    self.palette.input.cursor = @intCast(pos);
                 } else {
                     // Click on an item row: select and confirm that item.
                     const fi: usize = @intFromFloat(@floor((y - pal_y - input_row_h) / item_row_h));
@@ -1796,7 +836,7 @@ pub const Editor = struct {
         switch (kind) {
             1 => { // mousedown
                 if (button != 0) return;
-                const pos = posFromPoint(win, buf.bytes(), x, y);
+                const pos = posFromPoint(win, buf, buf.bytes(), x, y);
                 win.preferred_col = null;
                 const alt = (mods & @import("key.zig").MOD_ALT) != 0;
                 if (!alt) cs.clear();
@@ -1805,7 +845,7 @@ pub const Editor = struct {
             },
             0 => { // mousemove
                 const anchor = self.drag_anchor orelse return;
-                const pos = posFromPoint(win, buf.bytes(), x, y);
+                const pos = posFromPoint(win, buf, buf.bytes(), x, y);
                 cs.clear();
                 cs.insert(&self.cursor_pool, .{
                     .head = pos,
@@ -1828,3 +868,36 @@ pub const Editor = struct {
         if (self.getWindow(self.focused_window)) |win| win.onResize(width, height);
     }
 };
+
+// ── Fan-out free functions ────────────────────────────────────────────────────
+
+/// Insert text into a buffer, adjust all watching views, and rehighlight.
+/// Undo recording is handled by Buffer.insert (gated by history.recording).
+pub fn doInsert(ed: *Editor, buffer_id: BufferId, pos: usize, text: []const u8) !void {
+    const buf = ed.getBuffer(buffer_id) orelse return;
+    try buf.insert(pos, text);
+    const key: u32 = @bitCast(buffer_id);
+    if (ed.buffer_view_map.get(key)) |ids| {
+        for (ids.items) |bv_id| {
+            if (ed.getBufferView(bv_id)) |bv| bv.adjustForInsert(&ed.cursor_pool, pos, text.len);
+        }
+    }
+    ed.palette.matches_stale = true;
+    ed.highlighters.items[buffer_id.index].rehighlight(buf.bytes()) catch {};
+}
+
+/// Delete from a buffer, adjust all watching views, and rehighlight.
+/// Undo recording is handled by Buffer.delete (gated by history.recording).
+pub fn doDelete(ed: *Editor, buffer_id: BufferId, pos: usize, len: usize) void {
+    const buf = ed.getBuffer(buffer_id) orelse return;
+    buf.delete(pos, len) catch {};
+    const key: u32 = @bitCast(buffer_id);
+    if (ed.buffer_view_map.get(key)) |ids| {
+        for (ids.items) |bv_id| {
+            if (ed.getBufferView(bv_id)) |bv| bv.adjustForDelete(&ed.cursor_pool, pos, len);
+        }
+    }
+    ed.palette.matches_stale = true;
+    const buf_after = ed.getBuffer(buffer_id) orelse return;
+    ed.highlighters.items[buffer_id.index].rehighlight(buf_after.bytes()) catch {};
+}

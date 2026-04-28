@@ -1,9 +1,60 @@
 const std = @import("std");
 const BufferId = @import("buffer.zig").BufferId;
-const CursorSetId = @import("cursor_set.zig").CursorSetId;
-const CursorSet = @import("cursor_set.zig").CursorSet;
 const Op = @import("op.zig").Op;
 const Colorscheme = @import("op.zig").Colorscheme;
+const BufferView = @import("buffer_view.zig").BufferView;
+
+pub const InputField = struct {
+    buf: [256]u8 = undefined,
+    len: u16 = 0,
+    cursor: u16 = 0,
+
+    pub fn bytes(self: *const InputField) []const u8 {
+        return self.buf[0..self.len];
+    }
+
+    pub fn textLen(self: *const InputField) usize {
+        return self.len;
+    }
+
+    pub fn clear(self: *InputField) void {
+        self.len = 0;
+        self.cursor = 0;
+    }
+
+    pub fn insertSlice(self: *InputField, text: []const u8) void {
+        const avail = @as(u16, @intCast(self.buf.len)) - self.len;
+        const n: u16 = @intCast(@min(text.len, avail));
+        if (n == 0) return;
+        // Shift existing text right to make room.
+        std.mem.copyBackwards(u8, self.buf[self.cursor + n .. self.len + n], self.buf[self.cursor..self.len]);
+        @memcpy(self.buf[self.cursor .. self.cursor + n], text[0..n]);
+        self.len += n;
+        self.cursor += n;
+    }
+
+    pub fn deleteBack(self: *InputField) void {
+        if (self.cursor == 0) return;
+        self.cursor -= 1;
+        std.mem.copyForwards(u8, self.buf[self.cursor .. self.len - 1], self.buf[self.cursor + 1 .. self.len]);
+        self.len -= 1;
+    }
+
+    pub fn moveLeft(self: *InputField) void {
+        if (self.cursor > 0) self.cursor -= 1;
+    }
+
+    pub fn moveRight(self: *InputField) void {
+        if (self.cursor < self.len) self.cursor += 1;
+    }
+
+    pub fn setText(self: *InputField, text: []const u8) void {
+        const n: u16 = @intCast(@min(text.len, self.buf.len));
+        @memcpy(self.buf[0..n], text[0..n]);
+        self.len = n;
+        self.cursor = n;
+    }
+};
 
 pub const Match = struct {
     start: usize,
@@ -128,11 +179,10 @@ pub const PaletteConfig = struct {
 };
 
 pub const Palette = struct {
-    buffer_id: BufferId,
-    cursor_set_id: CursorSetId,
+    input: InputField = .{},
     /// Snapshot of focused window's cursor set, restored on Escape.
     /// start=0,len=0 until first openPalette call sets a real snapshot.
-    saved_cursors: CursorSet,
+    saved_cursors: BufferView,
     /// All match positions in the focused buffer, recomputed on each keystroke.
     matches: std.ArrayList(Match),
     matches_stale: bool = false,
@@ -146,12 +196,10 @@ pub const Palette = struct {
     picker_items: []const PickerItem = &.{},
     picker_selected: usize = 0,
 
-    pub fn init(buffer_id: BufferId, cursor_set_id: CursorSetId) Palette {
+    pub fn init() Palette {
         return .{
-            .buffer_id = buffer_id,
-            .cursor_set_id = cursor_set_id,
             // start=0 is a safe sentinel; len=0 means no cursors to restore.
-            .saved_cursors = CursorSet.init(buffer_id, @enumFromInt(0)),
+            .saved_cursors = BufferView.init(.{ .index = 0, .generation = 0 }, @enumFromInt(0)),
             .matches = .{},
         };
     }
@@ -195,6 +243,7 @@ pub const SETTINGS_ITEMS = [_]PickerItem{
     .{ .label = "Tab Width", .op_on_confirm = .tab_width_palette },
     .{ .label = "Language",  .op_on_confirm = .language_palette },
     .{ .label = "Theme",     .op_on_confirm = .colorscheme_palette },
+    .{ .label = "Soft Wrap", .op_on_confirm = .toggle_softwrap },
 };
 
 pub const TAB_WIDTH_ITEMS = [_]PickerItem{

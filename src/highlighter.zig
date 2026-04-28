@@ -6,8 +6,27 @@
 
 const std = @import("std");
 const BufferId = @import("buffer.zig").BufferId;
-const highlight = @import("highlight.zig");
 pub const Language = @import("op.zig").Language;
+
+pub const Tag = enum(u8) {
+    default,
+    keyword,
+    string,
+    comment,
+    number,
+    builtin,
+    identifier,
+    identifier_decl,   // identifier under var_decl / param_decl
+    punctuation,
+    type_primitive,    // BuildinTypeExpr: usize, u8, bool, void, f32, etc.
+    fn_name,           // function declaration name or call site
+};
+
+pub const Span = struct {
+    start: u32,
+    end: u32,
+    tag: Tag,
+};
 
 // ── Tree-sitter C API ─────────────────────────────────────────────────────────
 
@@ -57,7 +76,7 @@ extern fn tree_sitter_zig() *const TSLanguage;
 
 // Maps tree-sitter-zig node type strings to highlight tags.
 // Keywords appear as anonymous nodes whose .type IS the keyword text.
-const TAG_MAP = std.StaticStringMap(highlight.Tag).initComptime(.{
+const TAG_MAP = std.StaticStringMap(Tag).initComptime(.{
     // Named node types
     .{ "line_comment",          .comment        },
     .{ "container_doc_comment", .comment        },
@@ -105,7 +124,7 @@ const TAG_MAP = std.StaticStringMap(highlight.Tag).initComptime(.{
     .{ "nosuspend",     .keyword },
 });
 
-fn tagForTypeInContext(typ: []const u8, parent_type: []const u8) highlight.Tag {
+fn tagForTypeInContext(typ: []const u8, parent_type: []const u8) Tag {
     if (std.mem.eql(u8, typ, "IDENTIFIER")) {
         if (std.mem.eql(u8, parent_type, "VarDecl") or
             std.mem.eql(u8, parent_type, "ParamDecl"))
@@ -135,7 +154,7 @@ fn hasFnCallArgs(node: TSNode) bool {
     return false;
 }
 
-fn walkTree(root: TSNode, allocator: std.mem.Allocator, out: *std.ArrayList(highlight.Span)) !void {
+fn walkTree(root: TSNode, allocator: std.mem.Allocator, out: *std.ArrayList(Span)) !void {
     var stack: std.ArrayList(StackEntry) = .{};
     defer stack.deinit(allocator);
 
@@ -180,7 +199,7 @@ pub const Highlighter = struct {
     allocator: std.mem.Allocator,
     parser:    *TSParser,
     tree:      ?*TSTree,
-    spans:     std.ArrayList(highlight.Span),
+    spans:     std.ArrayList(Span),
     language:  Language = .zig,
 
     pub fn init(allocator: std.mem.Allocator, buffer_id: BufferId) !Highlighter {

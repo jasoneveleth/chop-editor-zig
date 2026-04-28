@@ -2,26 +2,13 @@ pub const Language = enum { zig, none };
 pub const Colorscheme = enum { onedark, alabaster };
 
 pub const Op = union(enum) {
-    search_forward: ?[]const u8,
-    search_backward: ?[]const u8,
-    split_selections: ?[]const u8,
-    split_selections_complement: ?[]const u8,
-    filter_keep: ?[]const u8,
-    filter_drop: ?[]const u8,
-    preview: PreviewPayload,
-    cancel_palette,
-    settings_palette,
     tab_width_palette,
     language_palette,
     colorscheme_palette,
     set_tab_width: u8,
     set_language: Language,
     set_colorscheme: Colorscheme,
-
-    pub const PreviewPayload = struct {
-        intent: PaletteOpKind,
-        text: []const u8,
-    };
+    toggle_softwrap,
 
     pub const PaletteOpKind = enum {
         search_forward,

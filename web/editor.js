@@ -94,6 +94,13 @@ const imports = {
       return ctx.measureText(wasmStr(ptr, len)).width;
     },
 
+    js_measure_text_with_prefix(pfx_ptr, pfx_len, txt_ptr, txt_len, size) {
+      ctx.font = `${size}px 'IBM Plex Mono', monospace`;
+      const prefix = wasmStr(pfx_ptr, pfx_len);
+      const text = wasmStr(txt_ptr, txt_len);
+      return ctx.measureText(prefix + text).width - ctx.measureText(prefix).width;
+    },
+
     js_panic(ptr, len) {
       throw new Error("zig panic: " + wasmStr(ptr, len));
     },

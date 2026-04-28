@@ -1,15 +1,21 @@
 const std = @import("std");
 const draw = @import("draw.zig");
-const Buffer = @import("buffer.zig").Buffer;
+const Key = @import("key.zig").Key;
+const KeyChord = @import("key.zig").KeyChord;
+const Editor = @import("editor.zig").Editor;
+const buffer_mod = @import("buffer.zig");
+const Buffer = buffer_mod.Buffer;
+const WrapRow = buffer_mod.WrapRow;
 const BufferId = @import("buffer.zig").BufferId;
-const CursorSet = @import("cursor_set.zig").CursorSet;
-const CursorSetId = @import("cursor_set.zig").CursorSetId;
-const CursorPool = @import("cursor_set.zig").CursorPool;
+const BufferView = @import("buffer_view.zig").BufferView;
+const BufferViewId = @import("buffer_view.zig").BufferViewId;
+const CursorPool = @import("buffer_view.zig").CursorPool;
 const Match = @import("palette.zig").Match;
-const highlight = @import("highlight.zig");
+const highlight = @import("highlighter.zig");
 const Colorscheme = @import("op.zig").Colorscheme;
 // Hardcoded to web for now — measureText is needed during layout.
 const platform = @import("platform/web.zig");
+const cursor_mod = @import("cursor.zig");
 
 const TagStyle = struct {
     fg: draw.Color,
@@ -47,6 +53,28 @@ fn tagStyle(tag: highlight.Tag, scheme: Colorscheme) TagStyle {
     };
 }
 
+fn findRowForPos(rows: []const WrapRow, pos: usize) usize {
+    var best: usize = 0;
+    for (rows, 0..) |row, i| {
+        if (pos >= row.start) best = i else break;
+    }
+    return best;
+}
+
+pub fn cursorUpWrapped(content: []const u8, head: usize, col_px: f32, font_size: f32, rows: []const WrapRow) usize {
+    const ri = findRowForPos(rows, head);
+    if (ri == 0) return head;
+    const prev = rows[ri - 1];
+    return cursor_mod.closestPosToX(content, prev.start, prev.end, col_px, font_size);
+}
+
+pub fn cursorDownWrapped(content: []const u8, head: usize, col_px: f32, font_size: f32, rows: []const WrapRow) usize {
+    const ri = findRowForPos(rows, head);
+    if (ri + 1 >= rows.len) return head;
+    const next = rows[ri + 1];
+    return cursor_mod.closestPosToX(content, next.start, next.end, col_px, font_size);
+}
+
 pub const WindowId = packed struct(u32) {
     index: u24,
     generation: u8,
@@ -74,7 +102,7 @@ pub const PendingState = union(enum) {
 pub const Window = struct {
     mode: Mode,
     buffer_id: BufferId,
-    cursor_set_id: CursorSetId,
+    buffer_view_id: BufferViewId,
     scroll_x: f32,
     scroll_y: f32,
     width: f32,
@@ -82,16 +110,19 @@ pub const Window = struct {
     font_size: f32,
     preferred_col: ?f32 = null,
     pending: PendingState = .none,
+    /// Set by multi-key commands; called on next key press before normal dispatch.
+    /// Cleared to null after the handler returns.
+    pending_key_handler: ?*const fn (ed: *Editor, chord: KeyChord) void = null,
     sneak_c1: u8 = 0,
     sneak_c2: u8 = 0,
     sneak_forward: bool = true,
     last_cmd: u8 = 0,
 
-    pub fn init(buffer_id: BufferId, cursor_set_id: CursorSetId, width: u32, height: u32) Window {
+    pub fn init(buffer_id: BufferId, buffer_view_id: BufferViewId, width: u32, height: u32) Window {
         return .{
             .mode = .normal,
             .buffer_id = buffer_id,
-            .cursor_set_id = cursor_set_id,
+            .buffer_view_id = buffer_view_id,
             .scroll_x = 0,
             .scroll_y = 0,
             .width = @floatFromInt(width),
@@ -102,7 +133,7 @@ pub const Window = struct {
 
     // No deinit — Window owns no heap memory.
 
-    pub fn buildDrawList(self: *Window, dl: *draw.DrawList, buf: *const Buffer, cs: *const CursorSet, pool: *const CursorPool, highlights: []const Match, spans: []const highlight.Span, cursor_visible: bool, scheme: Colorscheme) !void {
+    pub fn buildDrawList(self: *Window, dl: *draw.DrawList, buf: *const Buffer, cs: *const BufferView, pool: *const CursorPool, highlights: []const Match, spans: []const highlight.Span, cursor_visible: bool, scheme: Colorscheme) !void {
         const bg_color   = switch (scheme) { .onedark => draw.Color.rgb(41, 44, 51),   .alabaster => draw.Color.rgb(247, 247, 247) };
         const text_color = switch (scheme) { .onedark => draw.Color.rgb(204, 204, 204), .alabaster => draw.Color.rgb(27,  27,  27)  };
 
@@ -116,18 +147,18 @@ pub const Window = struct {
         const gutter_width: f32 = 8;
         const content = buf.bytes();
 
-        const line_starts = buf.lineStarts();
-        const line_count  = buf.lineCount();
+        const rows = buf.wrap_rows.items;
+        if (rows.len == 0) return;
 
-        // First visible line (floor of scroll_y / line_height, clamped).
-        const first_line: usize = @min(
+        // First visible row (floor of scroll_y / line_height, clamped).
+        const first_row: usize = @min(
             @as(usize, @intFromFloat(self.scroll_y / line_height)),
-            line_count - 1,
+            rows.len - 1,
         );
 
-        // Seed span_idx at the first span not fully before the first visible line.
+        // Seed span_idx at the first span not fully before the first visible row.
         var span_idx: usize = blk: {
-            const first_byte = line_starts[first_line];
+            const first_byte = rows[first_row].start;
             var lo: usize = 0;
             var hi: usize = spans.len;
             while (lo < hi) {
@@ -137,11 +168,12 @@ pub const Window = struct {
             break :blk lo;
         };
 
-        // Render visible lines — highlights drawn before text so text sits on top.
-        for (first_line..line_count) |ln| {
-            const line_start = line_starts[ln];
-            const line_end   = if (ln + 1 < line_count) line_starts[ln + 1] - 1 else content.len;
-            const line_y     = -self.scroll_y + @as(f32, @floatFromInt(ln)) * line_height;
+        // Render visible rows — highlights drawn before text so text sits on top.
+        for (first_row..rows.len) |ri| {
+            const row      = rows[ri];
+            const line_start = row.start;
+            const line_end   = row.end;
+            const line_y     = -self.scroll_y + @as(f32, @floatFromInt(ri)) * line_height;
             const baseline   = line_y + self.font_size;
 
             if (line_y >= self.height) break;
@@ -218,11 +250,11 @@ pub const Window = struct {
         const cursor_color = if (self.mode == .insert) insert_color else normal_color;
 
         for (cs.iter(pool)) |cursor| {
-            const ln      = buf.lineAt(cursor.head);
-            const cl_start = line_starts[ln];
-            const cl_y    = -self.scroll_y + @as(f32, @floatFromInt(ln)) * line_height;
+            const ri  = findRowForPos(rows, cursor.head);
+            const row = rows[ri];
+            const cl_y = -self.scroll_y + @as(f32, @floatFromInt(ri)) * line_height;
             if (cl_y + line_height >= 0 and cl_y < self.height) {
-                const cx = gutter_width + platform.measureText(content[cl_start..cursor.head], self.font_size);
+                const cx = gutter_width + platform.measureText(content[row.start..cursor.head], self.font_size);
                 if (cursor_visible) try dl.fillRect(
                     .{ .x = cx - 1, .y = cl_y, .w = 2, .h = line_height },
                     cursor_color,

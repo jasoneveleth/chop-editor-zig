@@ -1,18 +1,19 @@
 const std = @import("std");
 const Cursor = @import("cursor.zig").Cursor;
 const BufferId = @import("buffer.zig").BufferId;
+const WindowId = @import("window.zig").WindowId;
 
 pub const MAX_CURSORS = 512;
 
-/// An offset into CursorPool.slab (distinct from CursorSetId, UndoNodeIdx, etc.)
+/// An offset into CursorPool.slab (distinct from BufferViewId, UndoNodeIdx, etc.)
 pub const CursorPoolIdx = enum(u32) { _ };
 
-pub const CursorSetId = packed struct(u32) {
+pub const BufferViewId = packed struct(u32) {
     index: u24,
     generation: u8,
 };
 
-/// Flat slab of cursor slots.  Live cursor sets have a fixed pre-allocated
+/// Flat slab of cursor slots.  Live buffer views have a fixed pre-allocated
 /// region (MAX_CURSORS slots each).  Undo / palette snapshots are appended
 /// after those regions and are never mutated after creation.
 pub const CursorPool = struct {
@@ -54,21 +55,22 @@ pub const ReverseIter = struct {
     }
 };
 
-/// A cursor set is now a thin handle: `start` is a fixed offset into a
-/// CursorPool where MAX_CURSORS slots were pre-allocated at creation time.
+/// A buffer view is a thin handle into a CursorPool: `start` is a fixed offset
+/// where MAX_CURSORS slots were pre-allocated at creation time.
 /// All mutations happen in-place within that region; snapshots are separate
 /// pool regions written by CursorPool.snapshotRange.
-pub const CursorSet = struct {
+pub const BufferView = struct {
     buffer_id: BufferId,
+    window_id: ?WindowId = null,
     start: CursorPoolIdx,   // fixed, immutable after creation
     len: u32,
 
-    pub fn init(buffer_id: BufferId, start: CursorPoolIdx) CursorSet {
+    pub fn init(buffer_id: BufferId, start: CursorPoolIdx) BufferView {
         return .{ .buffer_id = buffer_id, .start = start, .len = 0 };
     }
 
     /// Insert a cursor maintaining sort order by start().
-    pub fn insert(self: *CursorSet, pool: *CursorPool, cursor: Cursor) !void {
+    pub fn insert(self: *BufferView, pool: *CursorPool, cursor: Cursor) !void {
         if (self.len >= MAX_CURSORS) return error.Overflow;
         // Binary search for insertion point.
         var lo: u32 = 0;
@@ -90,51 +92,51 @@ pub const CursorSet = struct {
         self.len += 1;
     }
 
-    pub fn iter(self: *const CursorSet, pool: *const CursorPool) []Cursor {
+    pub fn iter(self: *const BufferView, pool: *const CursorPool) []Cursor {
         return pool.slice(self.start, self.len);
     }
 
-    pub fn reverseIter(self: *CursorSet, pool: *CursorPool) ReverseIter {
+    pub fn reverseIter(self: *BufferView, pool: *CursorPool) ReverseIter {
         return .{ .slice = pool.slice(self.start, self.len), .index = self.len };
     }
 
-    pub fn adjustForInsert(self: *CursorSet, pool: *CursorPool, pos: usize, len: usize) void {
-        for (pool.slice(self.start, self.len)) |*c| c.adjustForInsert(pos, len);
+    pub fn adjustForInsert(self: *BufferView, pool: *CursorPool, pos: usize, amt: usize) void {
+        for (pool.slice(self.start, self.len)) |*c| c.adjustForInsert(pos, amt);
     }
 
-    pub fn adjustForDelete(self: *CursorSet, pool: *CursorPool, pos: usize, len: usize) void {
-        for (pool.slice(self.start, self.len)) |*c| c.adjustForDelete(pos, len);
+    pub fn adjustForDelete(self: *BufferView, pool: *CursorPool, pos: usize, amt: usize) void {
+        for (pool.slice(self.start, self.len)) |*c| c.adjustForDelete(pos, amt);
     }
 
-    pub fn clear(self: *CursorSet) void {
+    pub fn clear(self: *BufferView) void {
         self.len = 0;
     }
 
-    pub fn hasSelection(self: *const CursorSet, pool: *const CursorPool) bool {
+    pub fn hasSelection(self: *const BufferView, pool: *const CursorPool) bool {
         for (pool.slice(self.start, self.len)) |c| if (c.isSelection()) return true;
         return false;
     }
 
-    pub fn clearSelections(self: *CursorSet, pool: *CursorPool) void {
+    pub fn clearSelections(self: *BufferView, pool: *CursorPool) void {
         for (pool.slice(self.start, self.len)) |*c| c.anchor = c.head;
     }
 
-    pub fn collapseToStart(self: *CursorSet, pool: *CursorPool) void {
+    pub fn collapseToStart(self: *BufferView, pool: *CursorPool) void {
         for (pool.slice(self.start, self.len)) |*c| {
             c.head = c.start();
             c.anchor = c.head;
         }
     }
 
-    pub fn collapseToEnd(self: *CursorSet, pool: *CursorPool) void {
+    pub fn collapseToEnd(self: *BufferView, pool: *CursorPool) void {
         for (pool.slice(self.start, self.len)) |*c| {
             c.head = c.end();
             c.anchor = c.head;
         }
     }
 
-    /// Overwrite this set's live region with data from a snapshot region.
-    pub fn restoreFrom(self: *CursorSet, pool: *CursorPool, snap_start: CursorPoolIdx, snap_len: u32) void {
+    /// Overwrite this view's live region with data from a snapshot region.
+    pub fn restoreFrom(self: *BufferView, pool: *CursorPool, snap_start: CursorPoolIdx, snap_len: u32) void {
         @memcpy(
             pool.slice(self.start, snap_len),
             pool.slab.items[@intFromEnum(snap_start)..][0..snap_len],

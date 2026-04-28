@@ -10,6 +10,7 @@ extern fn js_clear_clip() void;
 // Called during layout so the editor can know how wide a string will render.
 // JS uses ctx.measureText() and returns the width in pixels.
 extern fn js_measure_text(ptr: [*]const u8, len: u32, size: f32) f32;
+extern fn js_measure_text_with_prefix(pfx_ptr: [*]const u8, pfx_len: u32, txt_ptr: [*]const u8, txt_len: u32, size: f32) f32;
 // Logging
 extern fn js_log(ptr: [*]const u8, len: usize) void;
 extern fn js_panic(ptr: [*]const u8, len: usize) void;
@@ -66,4 +67,10 @@ pub fn measureText(text: []const u8, size: f32) f32 {
         return 0;
     }
     return js_measure_text(text.ptr, @intCast(text.len), size);
+}
+
+pub fn measureTextWithPrefix(prefix: []const u8, text: []const u8, size: f32) f32 {
+    if (text.len == 0) return 0;
+    if (prefix.len == 0) return measureText(text, size);
+    return js_measure_text_with_prefix(prefix.ptr, @intCast(prefix.len), text.ptr, @intCast(text.len), size);
 }
