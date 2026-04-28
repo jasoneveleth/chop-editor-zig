@@ -87,7 +87,6 @@ pub const Mode = enum {
 
 pub const PendingState = union(enum) {
     none:   void,
-    prefix: u8,   // first key of a 2-key cmd (g/a/A/c/"), waiting for 2nd
     ms:     void, // 'm'+'s': waiting for surround char
     md:     void, // 'm'+'d': waiting for delete-surround char
     mr1:    void, // 'm'+'r': waiting for char1 (old delimiter)

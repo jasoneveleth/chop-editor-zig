@@ -752,179 +752,207 @@ pub fn openSettings(ed: *Editor, _: KeyChord) void {
 // ── Pending key handlers ───────────────────────────────────────────────────
 // These are called from Window.pending_key_handler when waiting for a second key.
 
-pub fn pendingPrefix(ed: *Editor, chord: KeyChord) void {
+pub fn pendingG(ed: *Editor, chord: KeyChord) void {
     const win = ed.getWindow(ed.focused_window) orelse return;
     const cs = ed.getBufferView(win.buffer_view_id) orelse return;
     const buf = ed.bufOf(win.buffer_id);
     const content = buf.bytes();
-    const prefix = switch (win.pending) {
-        .prefix => |p| p,
-        else => return,
-    };
     win.pending = .none;
-    switch (prefix) {
-        'g' => switch (chord.key) {
-            'k' => {
-                const first_line_end = grapheme.findChars(content, 0, "\n");
-                for (cs.iter(&ed.cursor_pool)) |*c| {
-                    const ls = grapheme.lineStart(content, c.head);
-                    const col_px = win.preferred_col orelse platform.measureText(content[ls..c.head], win.font_size);
-                    win.preferred_col = col_px;
-                    c.head = cursor_mod.closestPosToX(content, 0, first_line_end, col_px, win.font_size);
-                    c.anchor = c.head;
-                }
-            },
-            'j' => {
-                var last_ls: usize = 0;
-                for (content, 0..) |ch, i| {
-                    if (ch == '\n') last_ls = i + 1;
-                }
-                for (cs.iter(&ed.cursor_pool)) |*c| {
-                    const ls = grapheme.lineStart(content, c.head);
-                    const col_px = win.preferred_col orelse platform.measureText(content[ls..c.head], win.font_size);
-                    win.preferred_col = col_px;
-                    c.head = cursor_mod.closestPosToX(content, last_ls, content.len, col_px, win.font_size);
-                    c.anchor = c.head;
-                }
-            },
-            'h' => platform.openUrl("https://jason.pub/chop-editor-zig/keyboard-guide.html"),
-            else => {},
+    switch (chord.key) {
+        'k' => {
+            const first_line_end = grapheme.findChars(content, 0, "\n");
+            for (cs.iter(&ed.cursor_pool)) |*c| {
+                const ls = grapheme.lineStart(content, c.head);
+                const col_px = win.preferred_col orelse platform.measureText(content[ls..c.head], win.font_size);
+                win.preferred_col = col_px;
+                c.head = cursor_mod.closestPosToX(content, 0, first_line_end, col_px, win.font_size);
+                c.anchor = c.head;
+            }
         },
-        'a' => switch (chord.key) {
-            'w' => {
-                for (cs.iter(&ed.cursor_pool)) |*c| {
-                    if (cursor_mod.wordBoundsAt(content, c.head)) |wb| {
-                        c.anchor = wb.start;
-                        c.head = wb.end;
-                    }
-                }
-            },
-            '\'' => {
-                for (cs.iter(&ed.cursor_pool)) |*c| {
-                    if (cursor_mod.quoteBounds(content, c.head, '\'')) |qb| {
-                        c.anchor = qb.start + 1;
-                        c.head = qb.end;
-                    }
-                }
-            },
-            '(', ')' => {
-                for (cs.iter(&ed.cursor_pool)) |*c| {
-                    if (cursor_mod.parenBounds(content, c.head, '(', ')')) |pb| {
-                        c.anchor = pb.start + 1;
-                        c.head = pb.end;
-                    }
-                }
-            },
-            'p' => {
-                for (cs.iter(&ed.cursor_pool)) |*c| {
-                    var s = grapheme.lineStart(content, c.head);
-                    while (s > 0) {
-                        const prev_le = s - 1;
-                        const prev_ls = grapheme.lineStart(content, prev_le);
-                        if (prev_ls == prev_le) break;
-                        s = prev_ls;
-                    }
-                    var e = c.head;
-                    while (e < content.len) {
-                        const le = grapheme.findChars(content, e, "\n");
-                        if (le == grapheme.lineStart(content, e)) break;
-                        e = if (le < content.len) le + 1 else content.len;
-                    }
-                    c.anchor = s;
-                    c.head = e;
-                }
-            },
-            'e' => {
-                if (cs.len > 0) {
-                    const items = cs.iter(&ed.cursor_pool);
-                    items[0].anchor = 0;
-                    items[0].head = content.len;
-                    cs.len = 1;
-                }
-            },
-            else => {},
+        'j' => {
+            var last_ls: usize = 0;
+            for (content, 0..) |ch, i| {
+                if (ch == '\n') last_ls = i + 1;
+            }
+            for (cs.iter(&ed.cursor_pool)) |*c| {
+                const ls = grapheme.lineStart(content, c.head);
+                const col_px = win.preferred_col orelse platform.measureText(content[ls..c.head], win.font_size);
+                win.preferred_col = col_px;
+                c.head = cursor_mod.closestPosToX(content, last_ls, content.len, col_px, win.font_size);
+                c.anchor = c.head;
+            }
         },
-        'A' => switch (chord.key) {
-            '\'' => {
-                for (cs.iter(&ed.cursor_pool)) |*c| {
-                    if (cursor_mod.quoteBounds(content, c.head, '\'')) |qb| {
-                        c.anchor = qb.start;
-                        c.head = qb.end + 1;
-                    }
+        'h' => platform.openUrl("https://jason.pub/chop-editor-zig/keyboard-guide.html"),
+        else => {},
+    }
+}
+
+pub fn pendingA(ed: *Editor, chord: KeyChord) void {
+    const win = ed.getWindow(ed.focused_window) orelse return;
+    const cs = ed.getBufferView(win.buffer_view_id) orelse return;
+    const buf = ed.bufOf(win.buffer_id);
+    const content = buf.bytes();
+    win.pending = .none;
+    switch (chord.key) {
+        'w' => {
+            for (cs.iter(&ed.cursor_pool)) |*c| {
+                if (cursor_mod.wordBoundsAt(content, c.head)) |wb| {
+                    c.anchor = wb.start;
+                    c.head = wb.end;
                 }
-            },
-            else => {},
+            }
         },
-        'C' => switch (chord.key) {
-            'd' => {
-                if (cs.len > 1) cs.len = 1;
-            },
-            'v' => {
-                for (cs.iter(&ed.cursor_pool)) |*c| {
-                    c.anchor = c.head;
+        '\'' => {
+            for (cs.iter(&ed.cursor_pool)) |*c| {
+                if (cursor_mod.quoteBounds(content, c.head, '\'')) |qb| {
+                    c.anchor = qb.start + 1;
+                    c.head = qb.end;
                 }
-            },
-            'c' => {
-                for (cs.iter(&ed.cursor_pool)) |*c| {
+            }
+        },
+        '(', ')' => {
+            for (cs.iter(&ed.cursor_pool)) |*c| {
+                if (cursor_mod.parenBounds(content, c.head, '(', ')')) |pb| {
+                    c.anchor = pb.start + 1;
+                    c.head = pb.end;
+                }
+            }
+        },
+        'p' => {
+            for (cs.iter(&ed.cursor_pool)) |*c| {
+                var s = grapheme.lineStart(content, c.head);
+                while (s > 0) {
+                    const prev_le = s - 1;
+                    const prev_ls = grapheme.lineStart(content, prev_le);
+                    if (prev_ls == prev_le) break;
+                    s = prev_ls;
+                }
+                var e = c.head;
+                while (e < content.len) {
+                    const le = grapheme.findChars(content, e, "\n");
+                    if (le == grapheme.lineStart(content, e)) break;
+                    e = if (le < content.len) le + 1 else content.len;
+                }
+                c.anchor = s;
+                c.head = e;
+            }
+        },
+        'e' => {
+            if (cs.len > 0) {
+                const items = cs.iter(&ed.cursor_pool);
+                items[0].anchor = 0;
+                items[0].head = content.len;
+                cs.len = 1;
+            }
+        },
+        else => {},
+    }
+}
+
+pub fn pendingAUpper(ed: *Editor, chord: KeyChord) void {
+    const win = ed.getWindow(ed.focused_window) orelse return;
+    const cs = ed.getBufferView(win.buffer_view_id) orelse return;
+    const buf = ed.bufOf(win.buffer_id);
+    const content = buf.bytes();
+    win.pending = .none;
+    switch (chord.key) {
+        '\'' => {
+            for (cs.iter(&ed.cursor_pool)) |*c| {
+                if (cursor_mod.quoteBounds(content, c.head, '\'')) |qb| {
+                    c.anchor = qb.start;
+                    c.head = qb.end + 1;
+                }
+            }
+        },
+        else => {},
+    }
+}
+
+pub fn pendingCUpper(ed: *Editor, chord: KeyChord) void {
+    const win = ed.getWindow(ed.focused_window) orelse return;
+    const cs = ed.getBufferView(win.buffer_view_id) orelse return;
+    win.pending = .none;
+    switch (chord.key) {
+        'd' => {
+            if (cs.len > 1) cs.len = 1;
+        },
+        'v' => {
+            for (cs.iter(&ed.cursor_pool)) |*c| {
+                c.anchor = c.head;
+            }
+        },
+        'c' => {
+            for (cs.iter(&ed.cursor_pool)) |*c| {
+                const tmp = c.head;
+                c.head = c.anchor;
+                c.anchor = tmp;
+            }
+        },
+        'C' => {
+            for (cs.iter(&ed.cursor_pool)) |*c| {
+                if (c.head > c.anchor) {
                     const tmp = c.head;
                     c.head = c.anchor;
                     c.anchor = tmp;
                 }
-            },
-            'C' => {
-                for (cs.iter(&ed.cursor_pool)) |*c| {
-                    if (c.head > c.anchor) {
-                        const tmp = c.head;
-                        c.head = c.anchor;
-                        c.anchor = tmp;
-                    }
-                }
-            },
-            else => {},
+            }
         },
-        '"' => switch (chord.key) {
-            'j' => {
-                const items = cs.iter(&ed.cursor_pool);
-                const ls = grapheme.lineStart(content, items[0].head);
-                const col_px = win.preferred_col orelse platform.measureText(content[ls..items[0].head], win.font_size);
-                win.preferred_col = col_px;
-                const rows = buf.wrap_rows.items;
-                for (items) |*c| {
-                    c.head = if (buf.softwrap)
-                        window_mod.cursorDownWrapped(content, c.head, col_px, win.font_size, rows)
-                    else
-                        cursor_mod.cursorDown(content, c.head, col_px, win.font_size);
-                }
-            },
-            'k' => {
-                const items = cs.iter(&ed.cursor_pool);
-                const ls = grapheme.lineStart(content, items[0].head);
-                const col_px = win.preferred_col orelse platform.measureText(content[ls..items[0].head], win.font_size);
-                win.preferred_col = col_px;
-                const rows = buf.wrap_rows.items;
-                for (items) |*c| {
-                    c.head = if (buf.softwrap)
-                        window_mod.cursorUpWrapped(content, c.head, col_px, win.font_size, rows)
-                    else
-                        cursor_mod.cursorUp(content, c.head, col_px, win.font_size);
-                }
-            },
-            else => {},
+        else => {},
+    }
+}
+
+pub fn pendingQuote(ed: *Editor, chord: KeyChord) void {
+    const win = ed.getWindow(ed.focused_window) orelse return;
+    const cs = ed.getBufferView(win.buffer_view_id) orelse return;
+    const buf = ed.bufOf(win.buffer_id);
+    const content = buf.bytes();
+    win.pending = .none;
+    switch (chord.key) {
+        'j' => {
+            const items = cs.iter(&ed.cursor_pool);
+            const ls = grapheme.lineStart(content, items[0].head);
+            const col_px = win.preferred_col orelse platform.measureText(content[ls..items[0].head], win.font_size);
+            win.preferred_col = col_px;
+            const rows = buf.wrap_rows.items;
+            for (items) |*c| {
+                c.head = if (buf.softwrap)
+                    window_mod.cursorDownWrapped(content, c.head, col_px, win.font_size, rows)
+                else
+                    cursor_mod.cursorDown(content, c.head, col_px, win.font_size);
+            }
         },
-        'm' => switch (chord.key) {
-            's' => {
-                win.pending = .ms;
-                win.pending_key_handler = pendingSurround;
-            },
-            'd' => {
-                win.pending = .md;
-                win.pending_key_handler = pendingDeleteSurround;
-            },
-            'r' => {
-                win.pending = .mr1;
-                win.pending_key_handler = pendingReplaceSurround1;
-            },
-            else => {},
+        'k' => {
+            const items = cs.iter(&ed.cursor_pool);
+            const ls = grapheme.lineStart(content, items[0].head);
+            const col_px = win.preferred_col orelse platform.measureText(content[ls..items[0].head], win.font_size);
+            win.preferred_col = col_px;
+            const rows = buf.wrap_rows.items;
+            for (items) |*c| {
+                c.head = if (buf.softwrap)
+                    window_mod.cursorUpWrapped(content, c.head, col_px, win.font_size, rows)
+                else
+                    cursor_mod.cursorUp(content, c.head, col_px, win.font_size);
+            }
+        },
+        else => {},
+    }
+}
+
+pub fn pendingM(ed: *Editor, chord: KeyChord) void {
+    const win = ed.getWindow(ed.focused_window) orelse return;
+    win.pending = .none;
+    switch (chord.key) {
+        's' => {
+            win.pending = .ms;
+            win.pending_key_handler = pendingSurround;
+        },
+        'd' => {
+            win.pending = .md;
+            win.pending_key_handler = pendingDeleteSurround;
+        },
+        'r' => {
+            win.pending = .mr1;
+            win.pending_key_handler = pendingReplaceSurround1;
         },
         else => {},
     }
@@ -1098,8 +1126,15 @@ pub fn pendingPrefixSetup(ed: *Editor, chord: KeyChord) void {
     const win = ed.getWindow(ed.focused_window) orelse return;
     win.last_cmd = @intCast(chord.key);
     win.preferred_col = null;
-    win.pending = .{ .prefix = @intCast(chord.key) };
-    win.pending_key_handler = pendingPrefix;
+    win.pending_key_handler = switch (chord.key) {
+        'g' => pendingG,
+        'a' => pendingA,
+        'A' => pendingAUpper,
+        'C' => pendingCUpper,
+        '"' => pendingQuote,
+        'm' => pendingM,
+        else => return,
+    };
 }
 
 pub fn replaceLeftSetup(ed: *Editor, _: KeyChord) void {
