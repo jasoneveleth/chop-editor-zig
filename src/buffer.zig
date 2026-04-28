@@ -2,7 +2,6 @@ const std = @import("std");
 const platform = @import("platform/web.zig");
 const grapheme = @import("grapheme.zig");
 const undo_mod = @import("undo.zig");
-const UndoHistory = undo_mod.UndoHistory;
 const BufferView = @import("buffer_view.zig").BufferView;
 const CursorPool = @import("buffer_view.zig").CursorPool;
 
@@ -96,7 +95,7 @@ pub const WrapRow = struct {
 
 pub const Buffer = struct {
     text:      Text,
-    history:   UndoHistory = .{},
+    history:   undo_mod.UndoHistory = .{},
     allocator: std.mem.Allocator,
     softwrap:  bool = false,
     wrap_rows: std.ArrayListUnmanaged(WrapRow) = .{},
