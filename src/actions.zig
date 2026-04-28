@@ -352,6 +352,7 @@ pub fn cut(ed: *Editor, _: KeyChord) void {
         platform.writeClipboard(content[ls..line_end]);
         doDelete(ed, win.buffer_id, ls, line_end - ls);
     }
+    win.mode = .insert;
 }
 
 pub fn transposeChars(ed: *Editor, _: KeyChord) void {
