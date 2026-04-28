@@ -354,6 +354,7 @@ pub const Editor = struct {
         const cs = self.getBufferView(win.buffer_view_id) orelse return;
 
         const config = self.palette.active orelse return;
+        self.palette.active = null;
 
         if (confirm) {
             const text = self.palette.input.bytes();
@@ -390,8 +391,6 @@ pub const Editor = struct {
             cs.restoreFrom(&self.cursor_pool, self.palette.saved_cursors.start, self.palette.saved_cursors.len);
             self.palette.matches.clearRetainingCapacity();
         }
-
-        self.palette.active = null;
     }
 
     pub fn requireFreshMatches(self: *Editor) void {
