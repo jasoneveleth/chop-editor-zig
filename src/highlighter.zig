@@ -6,7 +6,7 @@
 
 const std = @import("std");
 const BufferId = @import("buffer.zig").BufferId;
-pub const Language = @import("op.zig").Language;
+pub const Language = enum { zig, none };
 
 pub const Tag = enum(u8) {
     default,

@@ -29,8 +29,8 @@ const SETTINGS_ITEMS = palette_mod.SETTINGS_ITEMS;
 const TAB_WIDTH_ITEMS = palette_mod.TAB_WIDTH_ITEMS;
 const LANGUAGE_ITEMS = palette_mod.LANGUAGE_ITEMS;
 const COLORSCHEME_ITEMS = palette_mod.COLORSCHEME_ITEMS;
-const Op = @import("op.zig").Op;
-const Colorscheme = @import("op.zig").Colorscheme;
+const PickerAction = palette_mod.PickerAction;
+const Colorscheme = palette_mod.Colorscheme;
 const platform = @import("platform/web.zig");
 const grapheme = @import("grapheme.zig");
 const Highlighter = @import("highlighter.zig").Highlighter;
@@ -364,10 +364,7 @@ pub const Editor = struct {
                 .split_selections_complement => self.executeSplit(text, true),
                 .filter_keep                 => self.executeFilter(text, true),
                 .filter_drop                 => self.executeFilter(text, false),
-                .settings_palette,
-                .tab_width_palette,
-                .language_palette,
-                .colorscheme_palette => {
+                .picker => {
                     // Reproduce the same ranked filter as drawPalette to find the selected item.
                     var cl_filtered_buf: [32]usize = undefined;
                     var cl_scores_buf: [32]palette_mod.MatchScore = undefined;
@@ -385,7 +382,7 @@ pub const Editor = struct {
                         palette_mod.sortResults(cl_filtered_buf[0..cl_filtered_len], cl_scores_buf[0..cl_filtered_len]);
                     if (self.palette.picker_selected < cl_filtered_len) {
                         const item = self.palette.picker_items[cl_filtered_buf[self.palette.picker_selected]];
-                        self.executeOp(item.op_on_confirm);
+                        self.executeOp(item.action);
                     }
                 },
             }
@@ -448,12 +445,12 @@ pub const Editor = struct {
         }
     }
 
-    fn executeOp(self: *Editor, op: Op) void {
+    fn executeOp(self: *Editor, op: PickerAction) void {
         switch (op) {
             .tab_width_palette => {
                 self.openPalette(.{
                     .prompt_symbol = "tab:",
-                    .op_kind = .tab_width_palette,
+                    .op_kind = .picker,
                     .prepopulate_selection = false,
                     .picker_items = &TAB_WIDTH_ITEMS,
                 }) catch {};
@@ -461,7 +458,7 @@ pub const Editor = struct {
             .language_palette => {
                 self.openPalette(.{
                     .prompt_symbol = "lang:",
-                    .op_kind = .language_palette,
+                    .op_kind = .picker,
                     .prepopulate_selection = false,
                     .picker_items = &LANGUAGE_ITEMS,
                 }) catch {};
@@ -469,7 +466,7 @@ pub const Editor = struct {
             .colorscheme_palette => {
                 self.openPalette(.{
                     .prompt_symbol = "theme:",
-                    .op_kind = .colorscheme_palette,
+                    .op_kind = .picker,
                     .prepopulate_selection = false,
                     .picker_items = &COLORSCHEME_ITEMS,
                 }) catch {};

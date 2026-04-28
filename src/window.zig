@@ -12,7 +12,7 @@ const BufferViewId = @import("buffer_view.zig").BufferViewId;
 const CursorPool = @import("buffer_view.zig").CursorPool;
 const Match = @import("palette.zig").Match;
 const highlight = @import("highlighter.zig");
-const Colorscheme = @import("op.zig").Colorscheme;
+const Colorscheme = @import("palette.zig").Colorscheme;
 // Hardcoded to web for now — measureText is needed during layout.
 const platform = @import("platform/web.zig");
 const cursor_mod = @import("cursor.zig");

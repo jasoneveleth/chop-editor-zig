@@ -6,7 +6,7 @@ const Editor = editor.Editor;
 const doInsert = editor.doInsert;
 const doDelete = editor.doDelete;
 const KeyChord = @import("key.zig").KeyChord;
-const MOD_ALT  = @import("key.zig").MOD_ALT;
+const MOD_ALT = @import("key.zig").MOD_ALT;
 const MOD_CTRL = @import("key.zig").MOD_CTRL;
 const MOD_META = @import("key.zig").MOD_META;
 const cursor_mod = @import("cursor.zig");
@@ -195,7 +195,9 @@ pub fn selectLineBackward(ed: *Editor, _: KeyChord) void {
 pub fn enterInsert(ed: *Editor, _: KeyChord) void {
     const win = ed.getWindow(ed.focused_window) orelse return;
     const cs = ed.getBufferView(win.buffer_view_id) orelse return;
-    for (cs.iter(&ed.cursor_pool)) |*c| { c.anchor = c.head; }
+    for (cs.iter(&ed.cursor_pool)) |*c| {
+        c.anchor = c.head;
+    }
     win.mode = .insert;
 }
 
@@ -307,7 +309,7 @@ pub fn deleteLines(ed: *Editor, _: KeyChord) void {
     }
 }
 
-pub fn yankOp(ed: *Editor, _: KeyChord) void {
+pub fn yank(ed: *Editor, _: KeyChord) void {
     const win = ed.getWindow(ed.focused_window) orelse return;
     const cs = ed.getBufferView(win.buffer_view_id) orelse return;
     if (cs.len == 0) return;
@@ -324,7 +326,7 @@ pub fn yankOp(ed: *Editor, _: KeyChord) void {
     }
 }
 
-pub fn pasteOp(ed: *Editor, _: KeyChord) void {
+pub fn paste(ed: *Editor, _: KeyChord) void {
     const win = ed.getWindow(ed.focused_window) orelse return;
     const cs = ed.getBufferView(win.buffer_view_id) orelse return;
     cs.clearSelections(&ed.cursor_pool);
@@ -332,7 +334,7 @@ pub fn pasteOp(ed: *Editor, _: KeyChord) void {
     if (clip.len > 0) ed.insertAtCursors(win, cs, clip);
 }
 
-pub fn cutOp(ed: *Editor, _: KeyChord) void {
+pub fn cut(ed: *Editor, _: KeyChord) void {
     const win = ed.getWindow(ed.focused_window) orelse return;
     const cs = ed.getBufferView(win.buffer_view_id) orelse return;
     if (cs.len == 0) return;
@@ -384,7 +386,7 @@ pub fn transposeWords(ed: *Editor, _: KeyChord) void {
     const content = buf.bytes();
     var it = cs.reverseIter(&ed.cursor_pool);
     while (it.next()) |c| {
-        if (c.head == 0 or (cursor_mod.isWordChar(content[c.head]) and cursor_mod.isWordChar(content[c.head-1]))) continue;
+        if (c.head == 0 or (cursor_mod.isWordChar(content[c.head]) and cursor_mod.isWordChar(content[c.head - 1]))) continue;
         var lend = c.head;
         while (lend > 0 and !cursor_mod.isWordChar(content[lend - 1])) lend -= 1;
         if (lend == 0) continue;
@@ -405,8 +407,8 @@ pub fn transposeWords(ed: *Editor, _: KeyChord) void {
         const prev_head = c.head;
         doDelete(ed, win.buffer_id, lstart, affected_len);
         doInsert(ed, win.buffer_id, lstart, affected[0..lword_len]) catch {};
-        doInsert(ed, win.buffer_id, lstart, affected[lend-lstart..rstart-lstart]) catch {};
-        doInsert(ed, win.buffer_id, lstart, affected[rstart-lstart..rend-lstart]) catch {};
+        doInsert(ed, win.buffer_id, lstart, affected[lend - lstart .. rstart - lstart]) catch {};
+        doInsert(ed, win.buffer_id, lstart, affected[rstart - lstart .. rend - lstart]) catch {};
         c.head = (prev_head + rword_len) - lword_len;
         c.anchor = c.head;
     }
@@ -614,7 +616,9 @@ pub fn dropToSingleCursor(ed: *Editor, _: KeyChord) void {
 pub fn collapseSelections(ed: *Editor, _: KeyChord) void {
     const win = ed.getWindow(ed.focused_window) orelse return;
     const cs = ed.getBufferView(win.buffer_view_id) orelse return;
-    for (cs.iter(&ed.cursor_pool)) |*c| { c.anchor = c.head; }
+    for (cs.iter(&ed.cursor_pool)) |*c| {
+        c.anchor = c.head;
+    }
 }
 
 pub fn flipSelectionDirection(ed: *Editor, _: KeyChord) void {
@@ -741,7 +745,7 @@ pub fn selectAllMatches(ed: *Editor, _: KeyChord) void {
 // ── Settings palette ───────────────────────────────────────────────────────
 
 pub fn openSettings(ed: *Editor, _: KeyChord) void {
-    ed.openPalette(.{ .prompt_symbol = ":", .op_kind = .settings_palette, .prepopulate_selection = false, .picker_items = &palette_mod.SETTINGS_ITEMS }) catch {};
+    ed.openPalette(.{ .prompt_symbol = ":", .op_kind = .picker, .prepopulate_selection = false, .picker_items = &palette_mod.SETTINGS_ITEMS }) catch {};
 }
 
 // ── Pending key handlers ───────────────────────────────────────────────────
@@ -851,8 +855,14 @@ pub fn pendingPrefix(ed: *Editor, chord: KeyChord) void {
             else => {},
         },
         'C' => switch (chord.key) {
-            'd' => { if (cs.len > 1) cs.len = 1; },
-            'v' => { for (cs.iter(&ed.cursor_pool)) |*c| { c.anchor = c.head; } },
+            'd' => {
+                if (cs.len > 1) cs.len = 1;
+            },
+            'v' => {
+                for (cs.iter(&ed.cursor_pool)) |*c| {
+                    c.anchor = c.head;
+                }
+            },
             'c' => {
                 for (cs.iter(&ed.cursor_pool)) |*c| {
                     const tmp = c.head;
@@ -901,9 +911,18 @@ pub fn pendingPrefix(ed: *Editor, chord: KeyChord) void {
             else => {},
         },
         'm' => switch (chord.key) {
-            's' => { win.pending = .ms; win.pending_key_handler = pendingSurround; },
-            'd' => { win.pending = .md; win.pending_key_handler = pendingDeleteSurround; },
-            'r' => { win.pending = .mr1; win.pending_key_handler = pendingReplaceSurround1; },
+            's' => {
+                win.pending = .ms;
+                win.pending_key_handler = pendingSurround;
+            },
+            'd' => {
+                win.pending = .md;
+                win.pending_key_handler = pendingDeleteSurround;
+            },
+            'r' => {
+                win.pending = .mr1;
+                win.pending_key_handler = pendingReplaceSurround1;
+            },
             else => {},
         },
         else => {},
@@ -953,7 +972,10 @@ pub fn pendingReplaceSurround1(ed: *Editor, chord: KeyChord) void {
 pub fn pendingReplaceSurround2(ed: *Editor, chord: KeyChord) void {
     const win = ed.getWindow(ed.focused_window) orelse return;
     const cs = ed.getBufferView(win.buffer_view_id) orelse return;
-    const char1 = switch (win.pending) { .mr2 => |c| c, else => return };
+    const char1 = switch (win.pending) {
+        .mr2 => |c| c,
+        else => return,
+    };
     win.pending = .none;
     win.pending_key_handler = null;
     const buf = ed.bufOf(win.buffer_id);
@@ -1009,7 +1031,10 @@ pub fn pendingReplaceRight(ed: *Editor, chord: KeyChord) void {
 
 pub fn pendingSneakFirst(ed: *Editor, chord: KeyChord) void {
     const win = ed.getWindow(ed.focused_window) orelse return;
-    const forward = switch (win.pending) { .sf1 => |f| f, else => return };
+    const forward = switch (win.pending) {
+        .sf1 => |f| f,
+        else => return,
+    };
     win.pending = .{ .sf2 = .{ .forward = forward, .c1 = @intCast(chord.key) } };
     win.pending_key_handler = pendingSneakSecond;
 }
@@ -1017,7 +1042,10 @@ pub fn pendingSneakFirst(ed: *Editor, chord: KeyChord) void {
 pub fn pendingSneakSecond(ed: *Editor, chord: KeyChord) void {
     const win = ed.getWindow(ed.focused_window) orelse return;
     const cs = ed.getBufferView(win.buffer_view_id) orelse return;
-    const state = switch (win.pending) { .sf2 => |s| s, else => return };
+    const state = switch (win.pending) {
+        .sf2 => |s| s,
+        else => return,
+    };
     win.pending = .none;
     win.pending_key_handler = null;
     const c2: u8 = @intCast(chord.key);
@@ -1267,11 +1295,9 @@ fn moveDir(ed: *Editor, win: *window_mod.Window, cs: *BufferView, dir: Dir) void
                 win.preferred_col = col_px;
                 const rows = buf.wrap_rows.items;
                 c.head = if (buf.softwrap)
-                    (if (dir == .up) window_mod.cursorUpWrapped(content, c.head, col_px, win.font_size, rows)
-                                    else window_mod.cursorDownWrapped(content, c.head, col_px, win.font_size, rows))
+                    (if (dir == .up) window_mod.cursorUpWrapped(content, c.head, col_px, win.font_size, rows) else window_mod.cursorDownWrapped(content, c.head, col_px, win.font_size, rows))
                 else
-                    (if (dir == .up) cursor_mod.cursorUp(content, c.head, col_px, win.font_size)
-                                    else cursor_mod.cursorDown(content, c.head, col_px, win.font_size));
+                    (if (dir == .up) cursor_mod.cursorUp(content, c.head, col_px, win.font_size) else cursor_mod.cursorDown(content, c.head, col_px, win.font_size));
             },
         }
         c.anchor = c.head;

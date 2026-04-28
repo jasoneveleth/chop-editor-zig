@@ -1,7 +1,28 @@
 const std = @import("std");
 const BufferId = @import("buffer.zig").BufferId;
-const Op = @import("op.zig").Op;
-const Colorscheme = @import("op.zig").Colorscheme;
+const Language = @import("highlighter.zig").Language;
+
+pub const Colorscheme = enum { onedark, alabaster };
+
+pub const PaletteKind = enum {
+    search_forward,
+    search_backward,
+    split_selections,
+    split_selections_complement,
+    filter_keep,
+    filter_drop,
+    picker,
+};
+
+pub const PickerAction = union(enum) {
+    tab_width_palette,
+    language_palette,
+    colorscheme_palette,
+    set_tab_width: u8,
+    set_language: Language,
+    set_colorscheme: Colorscheme,
+    toggle_softwrap,
+};
 const BufferView = @import("buffer_view.zig").BufferView;
 
 pub const InputField = struct {
@@ -166,12 +187,12 @@ pub const PreviewKind = enum {
 
 pub const PickerItem = struct {
     label: []const u8,
-    op_on_confirm: Op,
+    action: PickerAction,
 };
 
 pub const PaletteConfig = struct {
     prompt_symbol: []const u8,
-    op_kind: Op.PaletteOpKind,
+    op_kind: PaletteKind,
     require_selection: bool = false,
     prepopulate_selection: bool = true,
     preview: PreviewKind = .none,
@@ -240,24 +261,24 @@ pub fn findPrevMatchFrom(matches: []const Match, from: usize) ?Match {
 // ── Settings palette items ─────────────────────────────────────────────────
 
 pub const SETTINGS_ITEMS = [_]PickerItem{
-    .{ .label = "Tab Width", .op_on_confirm = .tab_width_palette },
-    .{ .label = "Language",  .op_on_confirm = .language_palette },
-    .{ .label = "Theme",     .op_on_confirm = .colorscheme_palette },
-    .{ .label = "Soft Wrap", .op_on_confirm = .toggle_softwrap },
+    .{ .label = "Tab Width", .action = .tab_width_palette },
+    .{ .label = "Language",  .action = .language_palette },
+    .{ .label = "Theme",     .action = .colorscheme_palette },
+    .{ .label = "Soft Wrap", .action = .toggle_softwrap },
 };
 
 pub const TAB_WIDTH_ITEMS = [_]PickerItem{
-    .{ .label = "2", .op_on_confirm = .{ .set_tab_width = 2 } },
-    .{ .label = "4", .op_on_confirm = .{ .set_tab_width = 4 } },
-    .{ .label = "8", .op_on_confirm = .{ .set_tab_width = 8 } },
+    .{ .label = "2", .action = .{ .set_tab_width = 2 } },
+    .{ .label = "4", .action = .{ .set_tab_width = 4 } },
+    .{ .label = "8", .action = .{ .set_tab_width = 8 } },
 };
 
 pub const LANGUAGE_ITEMS = [_]PickerItem{
-    .{ .label = "Zig",  .op_on_confirm = .{ .set_language = .zig } },
-    .{ .label = "None", .op_on_confirm = .{ .set_language = .none } },
+    .{ .label = "Zig",  .action = .{ .set_language = .zig } },
+    .{ .label = "None", .action = .{ .set_language = .none } },
 };
 
 pub const COLORSCHEME_ITEMS = [_]PickerItem{
-    .{ .label = "OneDark",   .op_on_confirm = .{ .set_colorscheme = .onedark } },
-    .{ .label = "Alabaster", .op_on_confirm = .{ .set_colorscheme = .alabaster } },
+    .{ .label = "OneDark",   .action = .{ .set_colorscheme = .onedark } },
+    .{ .label = "Alabaster", .action = .{ .set_colorscheme = .alabaster } },
 };
