@@ -13,7 +13,6 @@ const CursorPool = @import("buffer_view.zig").CursorPool;
 const Match = @import("palette.zig").Match;
 const highlight = @import("highlighter.zig");
 const Colorscheme = @import("palette.zig").Colorscheme;
-// Hardcoded to web for now — measureText is needed during layout.
 const platform = @import("platform/web.zig");
 const cursor_mod = @import("cursor.zig");
 
@@ -231,7 +230,21 @@ pub const Window = struct {
                         const seg = content[pos..seg_e];
                         const style = tagStyle(span.tag, scheme);
                         const seg_w = platform.measureText(seg, self.font_size);
-                        if (style.bg) |bg| if (span.start >= line_start) try dl.fillRect(.{ .x = x, .y = line_y, .w = seg_w, .h = line_height }, bg);
+                        if (style.bg) |bg| {
+                            var bg_x = x;
+                            var bg_w = seg_w;
+                            if (span.start < line_start) {
+                                // Trim leading whitespace from bg on soft-wrap continuation rows.
+                                var ws = pos;
+                                while (ws < seg_e and (content[ws] == ' ' or content[ws] == '\t')) ws += 1;
+                                if (ws > pos) {
+                                    const ws_w = platform.measureText(content[pos..ws], self.font_size);
+                                    bg_x += ws_w;
+                                    bg_w -= ws_w;
+                                }
+                            }
+                            if (bg_w > 0) try dl.fillRect(.{ .x = bg_x, .y = line_y, .w = bg_w, .h = line_height }, bg);
+                        }
                         try dl.drawText(x, baseline, seg, style.fg, self.font_size);
                         x += seg_w;
                         pos = seg_e;
