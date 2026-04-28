@@ -760,6 +760,8 @@ pub const Editor = struct {
     }
 
     pub fn onKeyDown(self: *Editor, time_ms: f64, key: Key, mods: u32) void {
+        if (key == .unknown) return;
+
         self.last_input_ms = time_ms;
         const win = self.getWindow(self.focused_window) orelse return;
         const chord = keybinds.keyChord(key, mods);
