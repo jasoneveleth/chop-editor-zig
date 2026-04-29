@@ -630,21 +630,6 @@ pub const Editor = struct {
         }
     }
 
-    pub fn yank(self: *Editor, win: *Window, cs: *BufferView) void {
-        if (cs.len == 0) return;
-        const buf = self.bufOf(win.buffer_id);
-        const content = buf.bytes();
-        const c = cs.iter(&self.cursor_pool)[0];
-        if (c.isSelection()) {
-            platform.writeClipboard(content[c.start()..c.end()]);
-        } else {
-            const ls = grapheme.lineStart(content, c.head);
-            const le = grapheme.findChars(content, c.head, "\n");
-            const line_end = if (le < content.len) le + 1 else content.len;
-            platform.writeClipboard(content[ls..line_end]);
-        }
-    }
-
     pub fn delete(self: *Editor, win: *Window, cs: *BufferView) void {
         if (cs.len == 0) return;
         const buf = self.bufOf(win.buffer_id);
@@ -658,56 +643,6 @@ pub const Editor = struct {
             const le = grapheme.findChars(content, c.head, "\n");
             const line_end = if (le < content.len) le + 1 else content.len;
             doDelete(self,win.buffer_id, ls, line_end - ls);
-        }
-    }
-
-    pub fn cut(self: *Editor, win: *Window, cs: *BufferView) void {
-        if (cs.len == 0) return;
-        const buf = self.bufOf(win.buffer_id);
-        const content = buf.bytes();
-        const c = cs.iter(&self.cursor_pool)[0];
-        if (c.isSelection()) {
-            platform.writeClipboard(content[c.start()..c.end()]);
-            self.deleteSelections(win, cs);
-            cs.clearSelections(&self.cursor_pool);
-        } else {
-            const ls = grapheme.lineStart(content, c.head);
-            const le = grapheme.findChars(content, c.head, "\n");
-            const line_end = if (le < content.len) le + 1 else content.len;
-            platform.writeClipboard(content[ls..line_end]);
-            doDelete(self,win.buffer_id, ls, line_end - ls);
-        }
-    }
-
-    pub fn paste(self: *Editor, win: *Window, cs: *BufferView) void {
-        cs.clearSelections(&self.cursor_pool);
-        const clip = platform.readClipboard();
-        if (clip.len > 0) self.insertAtCursors(win, cs, clip);
-    }
-
-    pub fn move(self: *Editor, win: *Window, cs: *BufferView, dir: Dir) void {
-        const buf = self.bufOf(win.buffer_id);
-        const content = buf.bytes();
-        for (cs.iter(&self.cursor_pool)) |*c| {
-            switch (dir) {
-                .left, .right => {
-                    c.head = if (dir == .left) cursor_mod.cursorLeft(content, c.head) else cursor_mod.cursorRight(content, c.head);
-                    win.preferred_col = null;
-                },
-                .up, .down => {
-                    const ls = grapheme.lineStart(content, c.head);
-                    const col_px = win.preferred_col orelse platform.measureText(content[ls..c.head], win.font_size);
-                    win.preferred_col = col_px;
-                    const rows = cs.wrap_rows.items;
-                    c.head = if (cs.softwrap)
-                        (if (dir == .up) window_mod.cursorUpWrapped(content, c.head, col_px, win.font_size, rows)
-                                        else window_mod.cursorDownWrapped(content, c.head, col_px, win.font_size, rows))
-                    else
-                        (if (dir == .up) cursor_mod.cursorUp(content, c.head, col_px, win.font_size)
-                                        else cursor_mod.cursorDown(content, c.head, col_px, win.font_size));
-                },
-            }
-            c.anchor = c.head;
         }
     }
 
