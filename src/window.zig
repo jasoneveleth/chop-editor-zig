@@ -179,6 +179,33 @@ pub const Window = struct {
             // Advance span_idx past spans that ended before this line.
             while (span_idx < spans.len and spans[span_idx].end <= line_start) span_idx += 1;
 
+            // Draw syntax highlight backgrounds first (so selections paint over them).
+            {
+                var si2: usize = span_idx;
+                while (si2 < spans.len and spans[si2].start < line_end) : (si2 += 1) {
+                    const span = spans[si2];
+                    const style = tagStyle(span.tag, scheme);
+                    if (style.bg == null) continue;
+                    const bg = style.bg.?;
+                    const seg_s = @max(span.start, line_start);
+                    const seg_e = @min(span.end, line_end);
+                    if (seg_s >= seg_e) continue;
+                    var bg_x = gutter_width + platform.measureText(content[line_start..seg_s], self.font_size);
+                    var bg_w = platform.measureText(content[seg_s..seg_e], self.font_size);
+                    if (span.start < line_start) {
+                        // Trim leading whitespace from bg on soft-wrap continuation rows.
+                        var ws = seg_s;
+                        while (ws < seg_e and (content[ws] == ' ' or content[ws] == '\t')) ws += 1;
+                        if (ws > seg_s) {
+                            const ws_w = platform.measureText(content[seg_s..ws], self.font_size);
+                            bg_x += ws_w;
+                            bg_w -= ws_w;
+                        }
+                    }
+                    if (bg_w > 0) try dl.fillRect(.{ .x = bg_x, .y = line_y, .w = bg_w, .h = line_height }, bg);
+                }
+            }
+
             // Draw selection highlights.
             for (cs.iter(pool)) |cursor| {
                 if (!cursor.isSelection()) continue;
@@ -229,21 +256,6 @@ pub const Window = struct {
                         const seg = content[pos..seg_e];
                         const style = tagStyle(span.tag, scheme);
                         const seg_w = platform.measureText(seg, self.font_size);
-                        if (style.bg) |bg| {
-                            var bg_x = x;
-                            var bg_w = seg_w;
-                            if (span.start < line_start) {
-                                // Trim leading whitespace from bg on soft-wrap continuation rows.
-                                var ws = pos;
-                                while (ws < seg_e and (content[ws] == ' ' or content[ws] == '\t')) ws += 1;
-                                if (ws > pos) {
-                                    const ws_w = platform.measureText(content[pos..ws], self.font_size);
-                                    bg_x += ws_w;
-                                    bg_w -= ws_w;
-                                }
-                            }
-                            if (bg_w > 0) try dl.fillRect(.{ .x = bg_x, .y = line_y, .w = bg_w, .h = line_height }, bg);
-                        }
                         try dl.drawText(x, baseline, seg, style.fg, self.font_size);
                         x += seg_w;
                         pos = seg_e;
