@@ -1,6 +1,4 @@
 const std = @import("std");
-const platform = @import("platform/web.zig");
-const grapheme = @import("grapheme.zig");
 const undo_mod = @import("undo.zig");
 const BufferView = @import("buffer_view.zig").BufferView;
 const CursorPool = @import("buffer_view.zig").CursorPool;
@@ -97,8 +95,6 @@ pub const Buffer = struct {
     text:      Text,
     history:   undo_mod.UndoHistory = .{},
     allocator: std.mem.Allocator,
-    softwrap:  bool = false,
-    wrap_rows: std.ArrayListUnmanaged(WrapRow) = .{},
 
     pub fn init(allocator: std.mem.Allocator) !Buffer {
         return .{
@@ -110,7 +106,6 @@ pub const Buffer = struct {
     pub fn deinit(self: *Buffer) void {
         self.text.deinit(self.allocator);
         self.history.deinit(self.allocator);
-        self.wrap_rows.deinit(self.allocator);
     }
 
     // ── Mutations ─────────────────────────────────────────────────────────
@@ -170,46 +165,4 @@ pub const Buffer = struct {
         return self.text.lineAt(byte);
     }
 
-    /// Rebuild wrap_rows based on softwrap setting and current content.
-    /// available_width is the renderable width in pixels (window width minus gutter).
-    pub fn buildWrapRows(self: *Buffer, available_width: f32, font_size: f32) !void {
-        self.wrap_rows.clearRetainingCapacity();
-        const content = self.bytes();
-        const line_starts = self.lineStarts();
-        const line_count = self.lineCount();
-
-        for (0..line_count) |ln| {
-            const line_start = line_starts[ln];
-            const line_end = if (ln + 1 < line_count) line_starts[ln + 1] - 1 else content.len;
-
-            if (!self.softwrap or line_start == line_end) {
-                try self.wrap_rows.append(self.allocator, .{ .line = ln, .start = line_start, .end = line_end });
-                continue;
-            }
-
-            var row_start = line_start;
-            var x_acc: f32 = 0;
-            var last_break: usize = line_start;
-            var it = grapheme.GraphemeIterator{ .text = content[0..line_end], .pos = @intCast(line_start) };
-            var g_start: usize = line_start;
-            while (it.next()) |g| {
-                const g_end: usize = @intCast(it.pos);
-                const gw = platform.measureTextWithPrefix(content[row_start..g_start], g, font_size);
-                if (x_acc + gw > available_width and g_start > row_start) {
-                    const break_at = if (last_break > row_start) last_break else g_start;
-                    try self.wrap_rows.append(self.allocator, .{ .line = ln, .start = row_start, .end = break_at });
-                    row_start = break_at;
-                    last_break = row_start;
-                    x_acc = platform.measureText(content[row_start..g_start], font_size);
-                    const new_gw = platform.measureTextWithPrefix(content[row_start..g_start], g, font_size);
-                    x_acc += new_gw;
-                } else {
-                    x_acc += gw;
-                }
-                if (g[0] == ' ' or g[0] == '\t') last_break = g_end;
-                g_start = g_end;
-            }
-            try self.wrap_rows.append(self.allocator, .{ .line = ln, .start = row_start, .end = line_end });
-        }
-    }
 };

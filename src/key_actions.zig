@@ -565,8 +565,8 @@ pub fn addCursorDown(ed: *Editor, _: KeyChord) void {
     const ls = grapheme.lineStart(content, last.head);
     const col_px = win.preferred_col orelse platform.measureText(content[ls..last.head], win.font_size);
     win.preferred_col = col_px;
-    const new_head = if (buf.softwrap)
-        window_mod.cursorDownWrapped(content, last.head, col_px, win.font_size, buf.wrap_rows.items)
+    const new_head = if (cs.softwrap)
+        window_mod.cursorDownWrapped(content, last.head, col_px, win.font_size, cs.wrap_rows.items)
     else
         cursor_mod.cursorDown(content, last.head, col_px, win.font_size);
     if (new_head != last.head)
@@ -583,8 +583,8 @@ pub fn addCursorUp(ed: *Editor, _: KeyChord) void {
     const ls = grapheme.lineStart(content, first.head);
     const col_px = win.preferred_col orelse platform.measureText(content[ls..first.head], win.font_size);
     win.preferred_col = col_px;
-    const new_head = if (buf.softwrap)
-        window_mod.cursorUpWrapped(content, first.head, col_px, win.font_size, buf.wrap_rows.items)
+    const new_head = if (cs.softwrap)
+        window_mod.cursorUpWrapped(content, first.head, col_px, win.font_size, cs.wrap_rows.items)
     else
         cursor_mod.cursorUp(content, first.head, col_px, win.font_size);
     if (new_head != first.head)
@@ -913,9 +913,9 @@ pub fn pendingQuote(ed: *Editor, chord: KeyChord) void {
             const ls = grapheme.lineStart(content, items[0].head);
             const col_px = win.preferred_col orelse platform.measureText(content[ls..items[0].head], win.font_size);
             win.preferred_col = col_px;
-            const rows = buf.wrap_rows.items;
+            const rows = cs.wrap_rows.items;
             for (items) |*c| {
-                c.head = if (buf.softwrap)
+                c.head = if (cs.softwrap)
                     window_mod.cursorDownWrapped(content, c.head, col_px, win.font_size, rows)
                 else
                     cursor_mod.cursorDown(content, c.head, col_px, win.font_size);
@@ -926,9 +926,9 @@ pub fn pendingQuote(ed: *Editor, chord: KeyChord) void {
             const ls = grapheme.lineStart(content, items[0].head);
             const col_px = win.preferred_col orelse platform.measureText(content[ls..items[0].head], win.font_size);
             win.preferred_col = col_px;
-            const rows = buf.wrap_rows.items;
+            const rows = cs.wrap_rows.items;
             for (items) |*c| {
-                c.head = if (buf.softwrap)
+                c.head = if (cs.softwrap)
                     window_mod.cursorUpWrapped(content, c.head, col_px, win.font_size, rows)
                 else
                     cursor_mod.cursorUp(content, c.head, col_px, win.font_size);
@@ -1329,8 +1329,8 @@ fn moveDir(ed: *Editor, win: *window_mod.Window, cs: *BufferView, dir: Dir) void
                 const ls = grapheme.lineStart(content, c.head);
                 const col_px = win.preferred_col orelse platform.measureText(content[ls..c.head], win.font_size);
                 win.preferred_col = col_px;
-                const rows = buf.wrap_rows.items;
-                c.head = if (buf.softwrap)
+                const rows = cs.wrap_rows.items;
+                c.head = if (cs.softwrap)
                     (if (dir == .up) window_mod.cursorUpWrapped(content, c.head, col_px, win.font_size, rows) else window_mod.cursorDownWrapped(content, c.head, col_px, win.font_size, rows))
                 else
                     (if (dir == .up) cursor_mod.cursorUp(content, c.head, col_px, win.font_size) else cursor_mod.cursorDown(content, c.head, col_px, win.font_size));

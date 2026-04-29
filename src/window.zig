@@ -145,7 +145,7 @@ pub const Window = struct {
         const gutter_width: f32 = 8;
         const content = buf.bytes();
 
-        const rows = buf.wrap_rows.items;
+        const rows = cs.wrap_rows.items;
         if (rows.len == 0) return;
 
         // First visible row (floor of scroll_y / line_height, clamped).

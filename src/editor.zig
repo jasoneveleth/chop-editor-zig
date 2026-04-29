@@ -41,16 +41,16 @@ const actions = @import("key_actions.zig");
 // ── Cursor movement helpers ────────────────────────────────────────────────
 
 /// Convert a click position to a buffer byte offset.
-fn posFromPoint(win: *const Window, buf: *const Buffer, content: []const u8, click_x: f32, click_y: f32) usize {
+fn posFromPoint(win: *const Window, cs: *const BufferView, content: []const u8, click_x: f32, click_y: f32) usize {
     const line_height = win.font_size * 1.4;
     const gutter_width: f32 = 8;
 
-    if (buf.softwrap and buf.wrap_rows.items.len > 0) {
+    if (cs.softwrap and cs.wrap_rows.items.len > 0) {
         const row_idx: usize = @min(
             @as(usize, @intFromFloat(@floor(@max(0.0, (click_y + win.scroll_y) / line_height)))),
-            buf.wrap_rows.items.len - 1,
+            cs.wrap_rows.items.len - 1,
         );
-        const row = buf.wrap_rows.items[row_idx];
+        const row = cs.wrap_rows.items[row_idx];
         return cursor_mod.closestPosToX(content, row.start, row.end, click_x - gutter_width, win.font_size);
     }
 
@@ -132,6 +132,7 @@ pub const Editor = struct {
         self.cursor_pool.deinit(self.allocator);
         self.windows.deinit(self.allocator);
         self.buffers.deinit(self.allocator);
+        for (self.buffer_views.items) |*bv| bv.deinit(self.allocator);
         self.buffer_views.deinit(self.allocator);
     }
 
@@ -472,8 +473,8 @@ pub const Editor = struct {
             },
             .toggle_softwrap => {
                 const win = self.getWindow(self.focused_window) orelse return;
-                const buf = self.getBuffer(win.buffer_id) orelse return;
-                buf.softwrap = !buf.softwrap;
+                const cs = self.getBufferView(win.buffer_view_id) orelse return;
+                cs.softwrap = !cs.softwrap;
             },
             .set_tab_width => |width| {
                 self.tab_width = width;
@@ -503,7 +504,7 @@ pub const Editor = struct {
         const cs = self.getBufferView(win.buffer_view_id) orelse return;
 
         const available_w = win.width - 8; // gutter_width
-        try buf.buildWrapRows(available_w, win.font_size);
+        try cs.buildWrapRows(self.allocator, buf, available_w, win.font_size);
 
         const highlights: []const Match = if (win.mode == .command) self.palette.matches.items else &.{};
         const spans = self.highlighters.items[win.buffer_id.index].spans.items;
@@ -697,8 +698,8 @@ pub const Editor = struct {
                     const ls = grapheme.lineStart(content, c.head);
                     const col_px = win.preferred_col orelse platform.measureText(content[ls..c.head], win.font_size);
                     win.preferred_col = col_px;
-                    const rows = buf.wrap_rows.items;
-                    c.head = if (buf.softwrap)
+                    const rows = cs.wrap_rows.items;
+                    c.head = if (cs.softwrap)
                         (if (dir == .up) window_mod.cursorUpWrapped(content, c.head, col_px, win.font_size, rows)
                                         else window_mod.cursorDownWrapped(content, c.head, col_px, win.font_size, rows))
                     else
@@ -834,7 +835,7 @@ pub const Editor = struct {
         switch (kind) {
             1 => { // mousedown
                 if (button != 0) return;
-                const pos = posFromPoint(win, buf, buf.bytes(), x, y);
+                const pos = posFromPoint(win, cs, buf.bytes(), x, y);
                 win.preferred_col = null;
                 const alt = (mods & @import("key.zig").MOD_ALT) != 0;
                 if (!alt) cs.clear();
@@ -843,7 +844,7 @@ pub const Editor = struct {
             },
             0 => { // mousemove
                 const anchor = self.drag_anchor orelse return;
-                const pos = posFromPoint(win, buf, buf.bytes(), x, y);
+                const pos = posFromPoint(win, cs, buf.bytes(), x, y);
                 cs.clear();
                 cs.insert(&self.cursor_pool, .{
                     .head = pos,
