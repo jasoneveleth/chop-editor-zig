@@ -85,18 +85,6 @@ pub const Mode = enum {
     command,
 };
 
-pub const PendingState = union(enum) {
-    none:   void,
-    ms:     void, // 'm'+'s': waiting for surround char
-    md:     void, // 'm'+'d': waiting for delete-surround char
-    mr1:    void, // 'm'+'r': waiting for char1 (old delimiter)
-    mr2:    u8,   // 'm'+'r'+'c1': waiting for char2 (new delimiter), stores c1
-    rl:     void, // 'r': waiting for replacement char (replaces char to left)
-    rr:     void, // 'R': waiting for replacement char (replaces char to right)
-    sf1:    bool, // 'f'/'F': waiting for first sneak char; true=forward
-    sf2:    struct { forward: bool, c1: u8 }, // 'f'/'F'+c1: waiting for second sneak char
-};
-
 pub const Window = struct {
     mode: Mode,
     buffer_id: BufferId,
@@ -107,10 +95,11 @@ pub const Window = struct {
     height: f32,
     font_size: f32,
     preferred_col: ?f32 = null,
-    pending: PendingState = .none,
     /// Set by multi-key commands; called on next key press before normal dispatch.
     /// Cleared to null after the handler returns.
     pending_key_handler: ?*const fn (ed: *Editor, chord: KeyChord) void = null,
+    /// Scratch byte for multi-key sequences that need to pass a char between handlers.
+    pending_char: u8 = 0,
     sneak_c1: u8 = 0,
     sneak_c2: u8 = 0,
     sneak_forward: bool = true,

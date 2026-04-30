@@ -5,7 +5,6 @@ const BufferId = @import("buffer.zig").BufferId;
 const window_mod = @import("window.zig");
 const Window = window_mod.Window;
 const WindowId = window_mod.WindowId;
-const PendingState = window_mod.PendingState;
 const buffer_view_mod = @import("buffer_view.zig");
 const BufferView = buffer_view_mod.BufferView;
 const BufferViewId = buffer_view_mod.BufferViewId;

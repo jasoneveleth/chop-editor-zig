@@ -757,7 +757,6 @@ pub fn pendingG(ed: *Editor, chord: KeyChord) void {
     const cs = ed.getBufferView(win.buffer_view_id) orelse return;
     const buf = ed.bufOf(win.buffer_id);
     const content = buf.bytes();
-    win.pending = .none;
     switch (chord.key) {
         'k' => {
             const first_line_end = grapheme.findChars(content, 0, "\n");
@@ -792,7 +791,6 @@ pub fn pendingA(ed: *Editor, chord: KeyChord) void {
     const cs = ed.getBufferView(win.buffer_view_id) orelse return;
     const buf = ed.bufOf(win.buffer_id);
     const content = buf.bytes();
-    win.pending = .none;
     switch (chord.key) {
         'w' => {
             for (cs.iter(&ed.cursor_pool)) |*c| {
@@ -854,7 +852,6 @@ pub fn pendingAUpper(ed: *Editor, chord: KeyChord) void {
     const cs = ed.getBufferView(win.buffer_view_id) orelse return;
     const buf = ed.bufOf(win.buffer_id);
     const content = buf.bytes();
-    win.pending = .none;
     switch (chord.key) {
         '\'' => {
             for (cs.iter(&ed.cursor_pool)) |*c| {
@@ -871,7 +868,6 @@ pub fn pendingAUpper(ed: *Editor, chord: KeyChord) void {
 pub fn pendingCUpper(ed: *Editor, chord: KeyChord) void {
     const win = ed.getWindow(ed.focused_window) orelse return;
     const cs = ed.getBufferView(win.buffer_view_id) orelse return;
-    win.pending = .none;
     switch (chord.key) {
         'd' => {
             if (cs.len > 1) cs.len = 1;
@@ -906,7 +902,6 @@ pub fn pendingQuote(ed: *Editor, chord: KeyChord) void {
     const cs = ed.getBufferView(win.buffer_view_id) orelse return;
     const buf = ed.bufOf(win.buffer_id);
     const content = buf.bytes();
-    win.pending = .none;
     switch (chord.key) {
         'j' => {
             const items = cs.iter(&ed.cursor_pool);
@@ -940,18 +935,14 @@ pub fn pendingQuote(ed: *Editor, chord: KeyChord) void {
 
 pub fn pendingM(ed: *Editor, chord: KeyChord) void {
     const win = ed.getWindow(ed.focused_window) orelse return;
-    win.pending = .none;
     switch (chord.key) {
         's' => {
-            win.pending = .ms;
             win.pending_key_handler = pendingSurround;
         },
         'd' => {
-            win.pending = .md;
             win.pending_key_handler = pendingDeleteSurround;
         },
         'r' => {
-            win.pending = .mr1;
             win.pending_key_handler = pendingReplaceSurround1;
         },
         else => {},
@@ -961,7 +952,6 @@ pub fn pendingM(ed: *Editor, chord: KeyChord) void {
 pub fn pendingSurround(ed: *Editor, chord: KeyChord) void {
     const win = ed.getWindow(ed.focused_window) orelse return;
     const cs = ed.getBufferView(win.buffer_view_id) orelse return;
-    win.pending = .none;
     win.pending_key_handler = null;
     const pair = cursor_mod.surroundPair(@intCast(chord.key));
     var it = cs.reverseIter(&ed.cursor_pool);
@@ -976,7 +966,6 @@ pub fn pendingSurround(ed: *Editor, chord: KeyChord) void {
 pub fn pendingDeleteSurround(ed: *Editor, chord: KeyChord) void {
     const win = ed.getWindow(ed.focused_window) orelse return;
     const cs = ed.getBufferView(win.buffer_view_id) orelse return;
-    win.pending = .none;
     win.pending_key_handler = null;
     const buf = ed.bufOf(win.buffer_id);
     const content = buf.bytes();
@@ -994,18 +983,14 @@ pub fn pendingDeleteSurround(ed: *Editor, chord: KeyChord) void {
 
 pub fn pendingReplaceSurround1(ed: *Editor, chord: KeyChord) void {
     const win = ed.getWindow(ed.focused_window) orelse return;
-    win.pending = .{ .mr2 = @intCast(chord.key) };
+    win.pending_char = @intCast(chord.key);
     win.pending_key_handler = pendingReplaceSurround2;
 }
 
 pub fn pendingReplaceSurround2(ed: *Editor, chord: KeyChord) void {
     const win = ed.getWindow(ed.focused_window) orelse return;
     const cs = ed.getBufferView(win.buffer_view_id) orelse return;
-    const char1 = switch (win.pending) {
-        .mr2 => |c| c,
-        else => return,
-    };
-    win.pending = .none;
+    const char1 = win.pending_char;
     win.pending_key_handler = null;
     const buf = ed.bufOf(win.buffer_id);
     const content = buf.bytes();
@@ -1025,7 +1010,6 @@ pub fn pendingReplaceSurround2(ed: *Editor, chord: KeyChord) void {
 pub fn pendingReplaceLeft(ed: *Editor, chord: KeyChord) void {
     const win = ed.getWindow(ed.focused_window) orelse return;
     const cs = ed.getBufferView(win.buffer_view_id) orelse return;
-    win.pending = .none;
     win.pending_key_handler = null;
     const buf = ed.bufOf(win.buffer_id);
     const content = buf.bytes();
@@ -1043,7 +1027,6 @@ pub fn pendingReplaceLeft(ed: *Editor, chord: KeyChord) void {
 pub fn pendingReplaceRight(ed: *Editor, chord: KeyChord) void {
     const win = ed.getWindow(ed.focused_window) orelse return;
     const cs = ed.getBufferView(win.buffer_view_id) orelse return;
-    win.pending = .none;
     win.pending_key_handler = null;
     const buf = ed.bufOf(win.buffer_id);
     const content = buf.bytes();
@@ -1060,36 +1043,26 @@ pub fn pendingReplaceRight(ed: *Editor, chord: KeyChord) void {
 
 pub fn pendingSneakFirst(ed: *Editor, chord: KeyChord) void {
     const win = ed.getWindow(ed.focused_window) orelse return;
-    const forward = switch (win.pending) {
-        .sf1 => |f| f,
-        else => return,
-    };
-    win.pending = .{ .sf2 = .{ .forward = forward, .c1 = @intCast(chord.key) } };
+    win.pending_char = @intCast(chord.key);
     win.pending_key_handler = pendingSneakSecond;
 }
 
 pub fn pendingSneakSecond(ed: *Editor, chord: KeyChord) void {
     const win = ed.getWindow(ed.focused_window) orelse return;
     const cs = ed.getBufferView(win.buffer_view_id) orelse return;
-    const state = switch (win.pending) {
-        .sf2 => |s| s,
-        else => return,
-    };
-    win.pending = .none;
     win.pending_key_handler = null;
+    const c1 = win.pending_char;
     const c2: u8 = @intCast(chord.key);
-    win.sneak_c1 = state.c1;
+    win.sneak_c1 = c1;
     win.sneak_c2 = c2;
-    win.sneak_forward = state.forward;
-    win.last_cmd = if (state.forward) 'f' else 'F';
-    execSneak(ed, win, cs, state.c1, c2, state.forward);
+    win.last_cmd = if (win.sneak_forward) 'f' else 'F';
+    execSneak(ed, win, cs, c1, c2, win.sneak_forward);
 }
 
 // ── Normal-mode actions (previously inline in onKeyDown) ───────────────────
 
 pub fn normalEscape(ed: *Editor, _: KeyChord) void {
     const win = ed.getWindow(ed.focused_window) orelse return;
-    win.pending = .none;
     win.pending_key_handler = null;
     win.preferred_col = null;
 }
@@ -1141,7 +1114,6 @@ pub fn replaceLeftSetup(ed: *Editor, _: KeyChord) void {
     const win = ed.getWindow(ed.focused_window) orelse return;
     win.last_cmd = 'r';
     win.preferred_col = null;
-    win.pending = .rl;
     win.pending_key_handler = pendingReplaceLeft;
 }
 
@@ -1149,7 +1121,6 @@ pub fn replaceRightSetup(ed: *Editor, _: KeyChord) void {
     const win = ed.getWindow(ed.focused_window) orelse return;
     win.last_cmd = 'R';
     win.preferred_col = null;
-    win.pending = .rr;
     win.pending_key_handler = pendingReplaceRight;
 }
 
@@ -1162,7 +1133,7 @@ pub fn sneakForwardSetup(ed: *Editor, _: KeyChord) void {
     if (prev_cmd == 'f' or prev_cmd == 'F') {
         execSneak(ed, win, cs, win.sneak_c1, win.sneak_c2, win.sneak_forward);
     } else {
-        win.pending = .{ .sf1 = true };
+        win.sneak_forward = true;
         win.pending_key_handler = pendingSneakFirst;
     }
 }
@@ -1176,7 +1147,7 @@ pub fn sneakBackwardSetup(ed: *Editor, _: KeyChord) void {
     if (prev_cmd == 'f' or prev_cmd == 'F') {
         execSneak(ed, win, cs, win.sneak_c1, win.sneak_c2, !win.sneak_forward);
     } else {
-        win.pending = .{ .sf1 = false };
+        win.sneak_forward = false;
         win.pending_key_handler = pendingSneakFirst;
     }
 }
