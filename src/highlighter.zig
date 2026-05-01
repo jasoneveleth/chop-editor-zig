@@ -5,7 +5,9 @@
 //   git clone --depth 1 https://github.com/maxxnino/tree-sitter-zig     vendor/tree-sitter-zig
 
 const std = @import("std");
-const BufferId = @import("buffer.zig").BufferId;
+const buffer = @import("buffer.zig");
+
+const BufferId = buffer.BufferId;
 pub const Language = enum { zig, none };
 
 pub const Tag = enum(u8) {

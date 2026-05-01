@@ -1,14 +1,17 @@
 /// Key dispatch tables — one per editor mode.
 /// Each table maps a packed KeyChord (u32) → Action.
 const std = @import("std");
-const Key = @import("key.zig").Key;
-const KeyChord = @import("key.zig").KeyChord;
-const MOD_SHIFT = @import("key.zig").MOD_SHIFT;
-const MOD_CTRL = @import("key.zig").MOD_CTRL;
-const MOD_ALT = @import("key.zig").MOD_ALT;
+const keys = @import("keys.zig");
 const actions = @import("key_actions.zig");
+const wnd = @import("window.zig");
+
+const Key = keys.Key;
+const KeyChord = keys.KeyChord;
+const MOD_SHIFT = keys.MOD_SHIFT;
+const MOD_CTRL = keys.MOD_CTRL;
+const MOD_ALT = keys.MOD_ALT;
 const Action = actions.Action;
-const Mode = @import("window.zig").Mode;
+const Mode = wnd.Mode;
 
 /// Build a KeyChord from a Key + mods.
 /// For non-alt printable chars (JS sends the shifted char already, e.g. 'W' not 'w'+SHIFT),

@@ -1,7 +1,9 @@
 const std = @import("std");
-const undo_mod = @import("undo.zig");
-const BufferView = @import("buffer_view.zig").BufferView;
-const CursorPool = @import("buffer_view.zig").CursorPool;
+const hist = @import("undo.zig");
+const bview = @import("buffer_view.zig");
+
+const BufferView = bview.BufferView;
+const CursorPool = bview.CursorPool;
 
 pub const BufferId = packed struct(u32) {
     index: u24,
@@ -93,7 +95,7 @@ pub const WrapRow = struct {
 
 pub const Buffer = struct {
     text:      Text,
-    history:   undo_mod.UndoHistory = .{},
+    history:   hist.UndoHistory = .{},
     allocator: std.mem.Allocator,
 
     pub fn init(allocator: std.mem.Allocator) !Buffer {

@@ -1,9 +1,12 @@
 const std = @import("std");
-const Text = @import("buffer.zig").Text;
-const BufferView = @import("buffer_view.zig").BufferView;
-const CursorPool = @import("buffer_view.zig").CursorPool;
-const CursorPoolIdx = @import("buffer_view.zig").CursorPoolIdx;
+const buffer = @import("buffer.zig");
+const bview = @import("buffer_view.zig");
 const platform = @import("platform/web.zig");
+
+const Text = buffer.Text;
+const BufferView = bview.BufferView;
+const CursorPool = bview.CursorPool;
+const CursorPoolIdx = bview.CursorPoolIdx;
 
 /// Index into UndoHistory.nodes[].
 pub const UndoNodeIdx = enum(u32) { null_node = std.math.maxInt(u32), _ };

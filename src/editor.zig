@@ -1,41 +1,47 @@
 const std = @import("std");
 const draw = @import("draw.zig");
-const Buffer = @import("buffer.zig").Buffer;
-const BufferId = @import("buffer.zig").BufferId;
-const window_mod = @import("window.zig");
-const Window = window_mod.Window;
-const WindowId = window_mod.WindowId;
-const buffer_view_mod = @import("buffer_view.zig");
-const BufferView = buffer_view_mod.BufferView;
-const BufferViewId = buffer_view_mod.BufferViewId;
-const CursorPool = buffer_view_mod.CursorPool;
-const MAX_CURSORS = buffer_view_mod.MAX_CURSORS;
-const cursor_mod = @import("cursor.zig");
-const Cursor = cursor_mod.Cursor;
-const Key = @import("key.zig").Key;
-const MOD_CTRL = @import("key.zig").MOD_CTRL;
-const MOD_SHIFT = @import("key.zig").MOD_SHIFT;
-const MOD_ALT = @import("key.zig").MOD_ALT;
-const palette_mod = @import("palette.zig");
-const Palette = palette_mod.Palette;
-const Match = palette_mod.Match;
-const Regex = @import("regex").Regex;
-const PaletteConfig = palette_mod.PaletteConfig;
-const PickerItem = palette_mod.PickerItem;
-const findNextMatchFrom = palette_mod.findNextMatchFrom;
-const findPrevMatchFrom = palette_mod.findPrevMatchFrom;
-const SETTINGS_ITEMS = palette_mod.SETTINGS_ITEMS;
-const TAB_WIDTH_ITEMS = palette_mod.TAB_WIDTH_ITEMS;
-const LANGUAGE_ITEMS = palette_mod.LANGUAGE_ITEMS;
-const COLORSCHEME_ITEMS = palette_mod.COLORSCHEME_ITEMS;
-const PickerAction = palette_mod.PickerAction;
-const Colorscheme = palette_mod.Colorscheme;
+const buffer = @import("buffer.zig");
+const wnd = @import("window.zig");
+const bview = @import("buffer_view.zig");
+const crsr = @import("cursor.zig");
+const keys = @import("keys.zig");
+const palette = @import("palette.zig");
+const regex = @import("regex");
 const platform = @import("platform/web.zig");
 const grapheme = @import("grapheme.zig");
-const Highlighter = @import("highlighter.zig").Highlighter;
-const FILLER_TEXT = @import("filler.zig").FILLER_TEXT;
+const highlighter = @import("highlighter.zig");
+const filler = @import("filler.zig");
 const keybinds = @import("keybinds.zig");
 const actions = @import("key_actions.zig");
+
+const Buffer = buffer.Buffer;
+const BufferId = buffer.BufferId;
+const Window = wnd.Window;
+const WindowId = wnd.WindowId;
+const BufferView = bview.BufferView;
+const BufferViewId = bview.BufferViewId;
+const CursorPool = bview.CursorPool;
+const MAX_CURSORS = bview.MAX_CURSORS;
+const Cursor = crsr.Cursor;
+const Key = keys.Key;
+const MOD_CTRL = keys.MOD_CTRL;
+const MOD_SHIFT = keys.MOD_SHIFT;
+const MOD_ALT = keys.MOD_ALT;
+const Palette = palette.Palette;
+const Match = palette.Match;
+const Regex = regex.Regex;
+const PaletteConfig = palette.PaletteConfig;
+const PickerItem = palette.PickerItem;
+const findNextMatchFrom = palette.findNextMatchFrom;
+const findPrevMatchFrom = palette.findPrevMatchFrom;
+const SETTINGS_ITEMS = palette.SETTINGS_ITEMS;
+const TAB_WIDTH_ITEMS = palette.TAB_WIDTH_ITEMS;
+const LANGUAGE_ITEMS = palette.LANGUAGE_ITEMS;
+const COLORSCHEME_ITEMS = palette.COLORSCHEME_ITEMS;
+const PickerAction = palette.PickerAction;
+const Colorscheme = palette.Colorscheme;
+const Highlighter = highlighter.Highlighter;
+const FILLER_TEXT = filler.FILLER_TEXT;
 
 // ── Cursor movement helpers ────────────────────────────────────────────────
 
@@ -50,7 +56,7 @@ fn posFromPoint(win: *const Window, cs: *const BufferView, content: []const u8, 
             cs.wrap_rows.items.len - 1,
         );
         const row = cs.wrap_rows.items[row_idx];
-        return cursor_mod.closestPosToX(content, row.start, row.end, click_x - gutter_width, win.font_size);
+        return crsr.closestPosToX(content, row.start, row.end, click_x - gutter_width, win.font_size);
     }
 
     const line_idx: usize = @intFromFloat(@floor(@max(0.0, (click_y + win.scroll_y) / line_height)));
@@ -62,7 +68,7 @@ fn posFromPoint(win: *const Window, cs: *const BufferView, content: []const u8, 
         const at_nl = !at_end and content[i] == '\n';
         if (at_nl or at_end) {
             if (current_line == line_idx)
-                return cursor_mod.closestPosToX(content, line_start, i, click_x - gutter_width, win.font_size);
+                return crsr.closestPosToX(content, line_start, i, click_x - gutter_width, win.font_size);
             line_start = i + 1;
             current_line += 1;
         }
@@ -368,10 +374,10 @@ pub const Editor = struct {
                 .picker => {
                     // Reproduce the same ranked filter as drawPalette to find the selected item.
                     var cl_filtered_buf: [32]usize = undefined;
-                    var cl_scores_buf: [32]palette_mod.MatchScore = undefined;
+                    var cl_scores_buf: [32]palette.MatchScore = undefined;
                     var cl_filtered_len: usize = 0;
                     for (self.palette.picker_items, 0..) |item, i| {
-                        const score = palette_mod.scoreMatch(text, item.label);
+                        const score = palette.scoreMatch(text, item.label);
                         if (score.tier != 255) {
                             cl_filtered_buf[cl_filtered_len] = i;
                             cl_scores_buf[cl_filtered_len] = score;
@@ -380,7 +386,7 @@ pub const Editor = struct {
                         }
                     }
                     if (text.len > 0)
-                        palette_mod.sortResults(cl_filtered_buf[0..cl_filtered_len], cl_scores_buf[0..cl_filtered_len]);
+                        palette.sortResults(cl_filtered_buf[0..cl_filtered_len], cl_scores_buf[0..cl_filtered_len]);
                     if (self.palette.picker_selected < cl_filtered_len) {
                         const item = self.palette.picker_items[cl_filtered_buf[self.palette.picker_selected]];
                         self.executeOp(item.action);
@@ -535,10 +541,10 @@ pub const Editor = struct {
 
         // Compute filtered+ranked picker items (indices into picker_items, max 32).
         var filtered_buf: [32]usize = undefined;
-        var scores_buf: [32]palette_mod.MatchScore = undefined;
+        var scores_buf: [32]palette.MatchScore = undefined;
         var filtered_len: usize = 0;
         for (self.palette.picker_items, 0..) |item, i| {
-            const score = palette_mod.scoreMatch(pattern, item.label);
+            const score = palette.scoreMatch(pattern, item.label);
             if (score.tier != 255) {
                 filtered_buf[filtered_len] = i;
                 scores_buf[filtered_len] = score;
@@ -547,7 +553,7 @@ pub const Editor = struct {
             }
         }
         if (pattern.len > 0)
-            palette_mod.sortResults(filtered_buf[0..filtered_len], scores_buf[0..filtered_len]);
+            palette.sortResults(filtered_buf[0..filtered_len], scores_buf[0..filtered_len]);
         const filtered = filtered_buf[0..filtered_len];
 
         // Total height: input row + item rows.
@@ -625,7 +631,7 @@ pub const Editor = struct {
         const content = buf.bytes();
         win.preferred_col = null;
         for (cs.iter(&self.cursor_pool)) |*c| {
-            c.head = if (dir == .left) cursor_mod.cursorLeft(content, c.head) else cursor_mod.cursorRight(content, c.head);
+            c.head = if (dir == .left) crsr.cursorLeft(content, c.head) else crsr.cursorRight(content, c.head);
         }
     }
 
@@ -651,9 +657,9 @@ pub const Editor = struct {
         const content = buf.bytes();
         for (cs.iter(&self.cursor_pool)) |*c| {
             const result = if (forward)
-                cursor_mod.sneakForward(content, c.head, c1, c2)
+                crsr.sneakForward(content, c.head, c1, c2)
             else
-                cursor_mod.sneakBackward(content, c.head, c1, c2);
+                crsr.sneakBackward(content, c.head, c1, c2);
             if (result) |pos| {
                 c.head = pos;
                 c.anchor = pos;
@@ -754,7 +760,7 @@ pub const Editor = struct {
                     const prompt = self.palette.promptSymbol();
                     const text_x = pal_x + 14;
                     const pat_x = text_x + platform.measureText(prompt, font_size) + 6;
-                    const pos = cursor_mod.closestPosToX(pattern, 0, pattern.len, x - pat_x, font_size);
+                    const pos = crsr.closestPosToX(pattern, 0, pattern.len, x - pat_x, font_size);
                     self.palette.input.cursor = @intCast(pos);
                 } else {
                     // Click on an item row: select and confirm that item.
@@ -771,7 +777,7 @@ pub const Editor = struct {
                 if (button != 0) return;
                 const pos = posFromPoint(win, cs, buf.bytes(), x, y);
                 win.preferred_col = null;
-                const alt = (mods & @import("key.zig").MOD_ALT) != 0;
+                const alt = (mods & @import("keys.zig").MOD_ALT) != 0;
                 if (!alt) cs.clear();
                 cs.insert(&self.cursor_pool, Cursor.init(pos)) catch {};
                 if (!alt) self.drag_anchor = pos;

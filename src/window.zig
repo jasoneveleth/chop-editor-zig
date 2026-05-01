@@ -1,27 +1,32 @@
 const std = @import("std");
 const draw = @import("draw.zig");
-const Key = @import("key.zig").Key;
-const KeyChord = @import("key.zig").KeyChord;
-const Editor = @import("editor.zig").Editor;
-const buffer_mod = @import("buffer.zig");
-const Buffer = buffer_mod.Buffer;
-const WrapRow = buffer_mod.WrapRow;
-const BufferId = @import("buffer.zig").BufferId;
-const BufferView = @import("buffer_view.zig").BufferView;
-const BufferViewId = @import("buffer_view.zig").BufferViewId;
-const CursorPool = @import("buffer_view.zig").CursorPool;
-const Match = @import("palette.zig").Match;
-const highlight = @import("highlighter.zig");
-const Colorscheme = @import("palette.zig").Colorscheme;
+const keys = @import("keys.zig");
+const editor = @import("editor.zig");
+const buffer = @import("buffer.zig");
+const bview = @import("buffer_view.zig");
+const palette = @import("palette.zig");
+const highlighter = @import("highlighter.zig");
 const platform = @import("platform/web.zig");
-const cursor_mod = @import("cursor.zig");
+const crsr = @import("cursor.zig");
+
+const Key = keys.Key;
+const KeyChord = keys.KeyChord;
+const Editor = editor.Editor;
+const Buffer = buffer.Buffer;
+const WrapRow = buffer.WrapRow;
+const BufferId = buffer.BufferId;
+const BufferView = bview.BufferView;
+const BufferViewId = bview.BufferViewId;
+const CursorPool = bview.CursorPool;
+const Match = palette.Match;
+const Colorscheme = palette.Colorscheme;
 
 const TagStyle = struct {
     fg: draw.Color,
     bg: ?draw.Color = null,
 };
 
-fn tagStyle(tag: highlight.Tag, scheme: Colorscheme) TagStyle {
+fn tagStyle(tag: highlighter.Tag, scheme: Colorscheme) TagStyle {
     return switch (scheme) {
         .onedark => switch (tag) {
             .default      => .{ .fg = draw.Color.rgb(204, 204, 204) },
@@ -64,14 +69,14 @@ pub fn cursorUpWrapped(content: []const u8, head: usize, col_px: f32, font_size:
     const ri = findRowForPos(rows, head);
     if (ri == 0) return head;
     const prev = rows[ri - 1];
-    return cursor_mod.closestPosToX(content, prev.start, prev.end, col_px, font_size);
+    return crsr.closestPosToX(content, prev.start, prev.end, col_px, font_size);
 }
 
 pub fn cursorDownWrapped(content: []const u8, head: usize, col_px: f32, font_size: f32, rows: []const WrapRow) usize {
     const ri = findRowForPos(rows, head);
     if (ri + 1 >= rows.len) return head;
     const next = rows[ri + 1];
-    return cursor_mod.closestPosToX(content, next.start, next.end, col_px, font_size);
+    return crsr.closestPosToX(content, next.start, next.end, col_px, font_size);
 }
 
 pub const WindowId = packed struct(u32) {
@@ -120,7 +125,7 @@ pub const Window = struct {
 
     // No deinit — Window owns no heap memory.
 
-    pub fn buildDrawList(self: *Window, dl: *draw.DrawList, buf: *const Buffer, cs: *const BufferView, pool: *const CursorPool, highlights: []const Match, spans: []const highlight.Span, cursor_visible: bool, scheme: Colorscheme) !void {
+    pub fn buildDrawList(self: *Window, dl: *draw.DrawList, buf: *const Buffer, cs: *const BufferView, pool: *const CursorPool, highlights: []const Match, spans: []const highlighter.Span, cursor_visible: bool, scheme: Colorscheme) !void {
         const bg_color   = switch (scheme) { .onedark => draw.Color.rgb(41, 44, 51),   .alabaster => draw.Color.rgb(247, 247, 247) };
         const text_color = switch (scheme) { .onedark => draw.Color.rgb(204, 204, 204), .alabaster => draw.Color.rgb(27,  27,  27)  };
 

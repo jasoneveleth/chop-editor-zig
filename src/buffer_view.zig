@@ -1,11 +1,15 @@
 const std = @import("std");
-const Cursor = @import("cursor.zig").Cursor;
-const BufferId = @import("buffer.zig").BufferId;
-const WrapRow = @import("buffer.zig").WrapRow;
-const Buffer = @import("buffer.zig").Buffer;
-const WindowId = @import("window.zig").WindowId;
+const crsr = @import("cursor.zig");
+const buffer = @import("buffer.zig");
+const wnd = @import("window.zig");
 const grapheme = @import("grapheme.zig");
 const platform = @import("platform/web.zig");
+
+const Cursor = crsr.Cursor;
+const BufferId = buffer.BufferId;
+const WrapRow = buffer.WrapRow;
+const Buffer = buffer.Buffer;
+const WindowId = wnd.WindowId;
 
 pub const MAX_CURSORS = 512;
 

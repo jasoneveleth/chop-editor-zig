@@ -2,21 +2,24 @@
 /// Called by the keybind dispatch table in keybinds.zig.
 const std = @import("std");
 const editor = @import("editor.zig");
+const keys = @import("keys.zig");
+const crsr = @import("cursor.zig");
+const grapheme = @import("grapheme.zig");
+const wnd = @import("window.zig");
+const bview = @import("buffer_view.zig");
+const platform = @import("platform/web.zig");
+const palette = @import("palette.zig");
+
 const Editor = editor.Editor;
 const doInsert = editor.doInsert;
 const doDelete = editor.doDelete;
-const KeyChord = @import("key.zig").KeyChord;
-const MOD_ALT = @import("key.zig").MOD_ALT;
-const MOD_CTRL = @import("key.zig").MOD_CTRL;
-const MOD_META = @import("key.zig").MOD_META;
-const cursor_mod = @import("cursor.zig");
-const grapheme = @import("grapheme.zig");
-const window_mod = @import("window.zig");
-const BufferView = @import("buffer_view.zig").BufferView;
-const platform = @import("platform/web.zig");
-const palette_mod = @import("palette.zig");
-const findNextMatchFrom = palette_mod.findNextMatchFrom;
-const findPrevMatchFrom = palette_mod.findPrevMatchFrom;
+const KeyChord = keys.KeyChord;
+const MOD_ALT = keys.MOD_ALT;
+const MOD_CTRL = keys.MOD_CTRL;
+const MOD_META = keys.MOD_META;
+const BufferView = bview.BufferView;
+const findNextMatchFrom = palette.findNextMatchFrom;
+const findPrevMatchFrom = palette.findPrevMatchFrom;
 
 pub const Action = *const fn (ed: *Editor, chord: KeyChord) void;
 
@@ -67,7 +70,7 @@ pub fn extendLeft(ed: *Editor, _: KeyChord) void {
     const cs = ed.getBufferView(win.buffer_view_id) orelse return;
     const content = ed.bufOf(win.buffer_id).bytes();
     win.preferred_col = null;
-    for (cs.iter(&ed.cursor_pool)) |*c| c.head = cursor_mod.cursorLeft(content, c.head);
+    for (cs.iter(&ed.cursor_pool)) |*c| c.head = crsr.cursorLeft(content, c.head);
 }
 
 pub fn extendRight(ed: *Editor, _: KeyChord) void {
@@ -75,7 +78,7 @@ pub fn extendRight(ed: *Editor, _: KeyChord) void {
     const cs = ed.getBufferView(win.buffer_view_id) orelse return;
     const content = ed.bufOf(win.buffer_id).bytes();
     win.preferred_col = null;
-    for (cs.iter(&ed.cursor_pool)) |*c| c.head = cursor_mod.cursorRight(content, c.head);
+    for (cs.iter(&ed.cursor_pool)) |*c| c.head = crsr.cursorRight(content, c.head);
 }
 
 pub fn wordNext(ed: *Editor, _: KeyChord) void {
@@ -84,7 +87,7 @@ pub fn wordNext(ed: *Editor, _: KeyChord) void {
     const buf = ed.bufOf(win.buffer_id);
     const content = buf.bytes();
     for (cs.iter(&ed.cursor_pool)) |*c| {
-        c.head = cursor_mod.wordNext(content, c.head);
+        c.head = crsr.wordNext(content, c.head);
         c.anchor = c.head;
     }
 }
@@ -95,7 +98,7 @@ pub fn wordNextExtend(ed: *Editor, _: KeyChord) void {
     const buf = ed.bufOf(win.buffer_id);
     const content = buf.bytes();
     for (cs.iter(&ed.cursor_pool)) |*c| {
-        c.head = cursor_mod.wordNext(content, c.head);
+        c.head = crsr.wordNext(content, c.head);
     }
 }
 
@@ -105,7 +108,7 @@ pub fn wordPrev(ed: *Editor, _: KeyChord) void {
     const buf = ed.bufOf(win.buffer_id);
     const content = buf.bytes();
     for (cs.iter(&ed.cursor_pool)) |*c| {
-        c.head = cursor_mod.wordPrev(content, c.head);
+        c.head = crsr.wordPrev(content, c.head);
         c.anchor = c.head;
     }
 }
@@ -116,7 +119,7 @@ pub fn wordPrevExtend(ed: *Editor, _: KeyChord) void {
     const buf = ed.bufOf(win.buffer_id);
     const content = buf.bytes();
     for (cs.iter(&ed.cursor_pool)) |*c| {
-        c.head = cursor_mod.wordPrev(content, c.head);
+        c.head = crsr.wordPrev(content, c.head);
     }
 }
 
@@ -362,8 +365,8 @@ pub fn transposeChars(ed: *Editor, _: KeyChord) void {
     const content = buf.bytes();
     var it = cs.reverseIter(&ed.cursor_pool);
     while (it.next()) |c| {
-        const prev = cursor_mod.cursorLeft(content, c.head);
-        const next = cursor_mod.cursorRight(content, c.head);
+        const prev = crsr.cursorLeft(content, c.head);
+        const next = crsr.cursorRight(content, c.head);
         if (prev < c.head and next > c.head) {
             const left_len = c.head - prev;
             const right_len = next - c.head;
@@ -374,7 +377,7 @@ pub fn transposeChars(ed: *Editor, _: KeyChord) void {
             doDelete(ed, win.buffer_id, prev, left_len + right_len);
             doInsert(ed, win.buffer_id, prev, right_copy[0..right_len]) catch {};
             doInsert(ed, win.buffer_id, prev + right_len, left_copy[0..left_len]) catch {};
-            c.head = cursor_mod.cursorLeft(content, c.head);
+            c.head = crsr.cursorLeft(content, c.head);
             c.anchor = c.head;
         }
     }
@@ -387,17 +390,17 @@ pub fn transposeWords(ed: *Editor, _: KeyChord) void {
     const content = buf.bytes();
     var it = cs.reverseIter(&ed.cursor_pool);
     while (it.next()) |c| {
-        if (c.head == 0 or (cursor_mod.isWordChar(content[c.head]) and cursor_mod.isWordChar(content[c.head - 1]))) continue;
+        if (c.head == 0 or (crsr.isWordChar(content[c.head]) and crsr.isWordChar(content[c.head - 1]))) continue;
         var lend = c.head;
-        while (lend > 0 and !cursor_mod.isWordChar(content[lend - 1])) lend -= 1;
+        while (lend > 0 and !crsr.isWordChar(content[lend - 1])) lend -= 1;
         if (lend == 0) continue;
         var lstart = lend;
-        while (lstart > 0 and cursor_mod.isWordChar(content[lstart - 1])) lstart -= 1;
+        while (lstart > 0 and crsr.isWordChar(content[lstart - 1])) lstart -= 1;
         var rstart = c.head;
-        while (rstart < content.len and !cursor_mod.isWordChar(content[rstart])) rstart += 1;
+        while (rstart < content.len and !crsr.isWordChar(content[rstart])) rstart += 1;
         if (rstart >= content.len) continue;
         var rend = rstart + 1;
-        while (rend < content.len and cursor_mod.isWordChar(content[rend])) rend += 1;
+        while (rend < content.len and crsr.isWordChar(content[rend])) rend += 1;
         if (lend > rstart) continue;
         const lword_len = lend - lstart;
         const rword_len = rend - rstart;
@@ -566,9 +569,9 @@ pub fn addCursorDown(ed: *Editor, _: KeyChord) void {
     const col_px = win.preferred_col orelse platform.measureText(content[ls..last.head], win.font_size);
     win.preferred_col = col_px;
     const new_head = if (cs.softwrap)
-        window_mod.cursorDownWrapped(content, last.head, col_px, win.font_size, cs.wrap_rows.items)
+        wnd.cursorDownWrapped(content, last.head, col_px, win.font_size, cs.wrap_rows.items)
     else
-        cursor_mod.cursorDown(content, last.head, col_px, win.font_size);
+        crsr.cursorDown(content, last.head, col_px, win.font_size);
     if (new_head != last.head)
         cs.insert(&ed.cursor_pool, .{ .head = new_head, .anchor = new_head }) catch {};
 }
@@ -584,9 +587,9 @@ pub fn addCursorUp(ed: *Editor, _: KeyChord) void {
     const col_px = win.preferred_col orelse platform.measureText(content[ls..first.head], win.font_size);
     win.preferred_col = col_px;
     const new_head = if (cs.softwrap)
-        window_mod.cursorUpWrapped(content, first.head, col_px, win.font_size, cs.wrap_rows.items)
+        wnd.cursorUpWrapped(content, first.head, col_px, win.font_size, cs.wrap_rows.items)
     else
-        cursor_mod.cursorUp(content, first.head, col_px, win.font_size);
+        crsr.cursorUp(content, first.head, col_px, win.font_size);
     if (new_head != first.head)
         cs.insert(&ed.cursor_pool, .{ .head = new_head, .anchor = new_head }) catch {};
 }
@@ -725,7 +728,7 @@ pub fn selectAllMatches(ed: *Editor, _: KeyChord) void {
         const c0 = cs.iter(&ed.cursor_pool)[0];
         const term: ?[]const u8 = if (c0.isSelection())
             content[c0.start()..c0.end()]
-        else if (cursor_mod.wordBoundsAt(content, c0.head)) |wb|
+        else if (crsr.wordBoundsAt(content, c0.head)) |wb|
             content[wb.start..wb.end]
         else
             null;
@@ -746,11 +749,11 @@ pub fn selectAllMatches(ed: *Editor, _: KeyChord) void {
 // ── Settings palette ───────────────────────────────────────────────────────
 
 pub fn openSettings(ed: *Editor, _: KeyChord) void {
-    ed.openPalette(.{ .prompt_symbol = ":", .op_kind = .picker, .prepopulate_selection = false, .picker_items = &palette_mod.SETTINGS_ITEMS }) catch {};
+    ed.openPalette(.{ .prompt_symbol = ":", .op_kind = .picker, .prepopulate_selection = false, .picker_items = &palette.SETTINGS_ITEMS }) catch {};
 }
 
 // ── Pending key handlers ───────────────────────────────────────────────────
-// These are called from Window.pending_key_handler when waiting for a second key.
+// These are called from Window.pending_key_handler when waiting for a second keys.
 
 pub fn pendingG(ed: *Editor, chord: KeyChord) void {
     const win = ed.getWindow(ed.focused_window) orelse return;
@@ -764,7 +767,7 @@ pub fn pendingG(ed: *Editor, chord: KeyChord) void {
                 const ls = grapheme.lineStart(content, c.head);
                 const col_px = win.preferred_col orelse platform.measureText(content[ls..c.head], win.font_size);
                 win.preferred_col = col_px;
-                c.head = cursor_mod.closestPosToX(content, 0, first_line_end, col_px, win.font_size);
+                c.head = crsr.closestPosToX(content, 0, first_line_end, col_px, win.font_size);
                 c.anchor = c.head;
             }
         },
@@ -777,7 +780,7 @@ pub fn pendingG(ed: *Editor, chord: KeyChord) void {
                 const ls = grapheme.lineStart(content, c.head);
                 const col_px = win.preferred_col orelse platform.measureText(content[ls..c.head], win.font_size);
                 win.preferred_col = col_px;
-                c.head = cursor_mod.closestPosToX(content, last_ls, content.len, col_px, win.font_size);
+                c.head = crsr.closestPosToX(content, last_ls, content.len, col_px, win.font_size);
                 c.anchor = c.head;
             }
         },
@@ -794,7 +797,7 @@ pub fn pendingA(ed: *Editor, chord: KeyChord) void {
     switch (chord.key) {
         'w' => {
             for (cs.iter(&ed.cursor_pool)) |*c| {
-                if (cursor_mod.wordBoundsAt(content, c.head)) |wb| {
+                if (crsr.wordBoundsAt(content, c.head)) |wb| {
                     c.anchor = wb.start;
                     c.head = wb.end;
                 }
@@ -802,7 +805,7 @@ pub fn pendingA(ed: *Editor, chord: KeyChord) void {
         },
         '\'' => {
             for (cs.iter(&ed.cursor_pool)) |*c| {
-                if (cursor_mod.quoteBounds(content, c.head, '\'')) |qb| {
+                if (crsr.quoteBounds(content, c.head, '\'')) |qb| {
                     c.anchor = qb.start + 1;
                     c.head = qb.end;
                 }
@@ -810,7 +813,7 @@ pub fn pendingA(ed: *Editor, chord: KeyChord) void {
         },
         '(', ')' => {
             for (cs.iter(&ed.cursor_pool)) |*c| {
-                if (cursor_mod.parenBounds(content, c.head, '(', ')')) |pb| {
+                if (crsr.parenBounds(content, c.head, '(', ')')) |pb| {
                     c.anchor = pb.start + 1;
                     c.head = pb.end;
                 }
@@ -855,7 +858,7 @@ pub fn pendingAUpper(ed: *Editor, chord: KeyChord) void {
     switch (chord.key) {
         '\'' => {
             for (cs.iter(&ed.cursor_pool)) |*c| {
-                if (cursor_mod.quoteBounds(content, c.head, '\'')) |qb| {
+                if (crsr.quoteBounds(content, c.head, '\'')) |qb| {
                     c.anchor = qb.start;
                     c.head = qb.end + 1;
                 }
@@ -911,9 +914,9 @@ pub fn pendingQuote(ed: *Editor, chord: KeyChord) void {
             const rows = cs.wrap_rows.items;
             for (items) |*c| {
                 c.head = if (cs.softwrap)
-                    window_mod.cursorDownWrapped(content, c.head, col_px, win.font_size, rows)
+                    wnd.cursorDownWrapped(content, c.head, col_px, win.font_size, rows)
                 else
-                    cursor_mod.cursorDown(content, c.head, col_px, win.font_size);
+                    crsr.cursorDown(content, c.head, col_px, win.font_size);
             }
         },
         'k' => {
@@ -924,9 +927,9 @@ pub fn pendingQuote(ed: *Editor, chord: KeyChord) void {
             const rows = cs.wrap_rows.items;
             for (items) |*c| {
                 c.head = if (cs.softwrap)
-                    window_mod.cursorUpWrapped(content, c.head, col_px, win.font_size, rows)
+                    wnd.cursorUpWrapped(content, c.head, col_px, win.font_size, rows)
                 else
-                    cursor_mod.cursorUp(content, c.head, col_px, win.font_size);
+                    crsr.cursorUp(content, c.head, col_px, win.font_size);
             }
         },
         else => {},
@@ -953,7 +956,7 @@ pub fn pendingSurround(ed: *Editor, chord: KeyChord) void {
     const win = ed.getWindow(ed.focused_window) orelse return;
     const cs = ed.getBufferView(win.buffer_view_id) orelse return;
     win.pending_key_handler = null;
-    const pair = cursor_mod.surroundPair(@intCast(chord.key));
+    const pair = crsr.surroundPair(@intCast(chord.key));
     var it = cs.reverseIter(&ed.cursor_pool);
     while (it.next()) |c| {
         const s = c.start();
@@ -972,7 +975,7 @@ pub fn pendingDeleteSurround(ed: *Editor, chord: KeyChord) void {
     const ch: u8 = @intCast(chord.key);
     var it = cs.reverseIter(&ed.cursor_pool);
     while (it.next()) |c| {
-        if (cursor_mod.surroundBounds(content, c.head, ch)) |b| {
+        if (crsr.surroundBounds(content, c.head, ch)) |b| {
             doDelete(ed, win.buffer_id, b.end, 1);
             doDelete(ed, win.buffer_id, b.start, 1);
             c.head = b.start;
@@ -995,10 +998,10 @@ pub fn pendingReplaceSurround2(ed: *Editor, chord: KeyChord) void {
     const buf = ed.bufOf(win.buffer_id);
     const content = buf.bytes();
     const char2: u8 = @intCast(chord.key);
-    const pair2 = cursor_mod.surroundPair(char2);
+    const pair2 = crsr.surroundPair(char2);
     var it = cs.reverseIter(&ed.cursor_pool);
     while (it.next()) |c| {
-        if (cursor_mod.surroundBounds(content, c.head, char1)) |b| {
+        if (crsr.surroundBounds(content, c.head, char1)) |b| {
             doDelete(ed, win.buffer_id, b.end, 1);
             doInsert(ed, win.buffer_id, b.end, &[_]u8{pair2.close}) catch {};
             doDelete(ed, win.buffer_id, b.start, 1);
@@ -1016,7 +1019,7 @@ pub fn pendingReplaceLeft(ed: *Editor, chord: KeyChord) void {
     const ch: u8 = @intCast(chord.key);
     var it = cs.reverseIter(&ed.cursor_pool);
     while (it.next()) |c| {
-        const prev = cursor_mod.cursorLeft(content, c.head);
+        const prev = crsr.cursorLeft(content, c.head);
         if (prev < c.head) {
             doDelete(ed, win.buffer_id, prev, c.head - prev);
             doInsert(ed, win.buffer_id, prev, &[_]u8{ch}) catch {};
@@ -1033,7 +1036,7 @@ pub fn pendingReplaceRight(ed: *Editor, chord: KeyChord) void {
     const ch: u8 = @intCast(chord.key);
     var it = cs.reverseIter(&ed.cursor_pool);
     while (it.next()) |c| {
-        const next = cursor_mod.cursorRight(content, c.head);
+        const next = crsr.cursorRight(content, c.head);
         if (next > c.head) {
             doInsert(ed, win.buffer_id, next, &[_]u8{ch}) catch {};
             doDelete(ed, win.buffer_id, c.head, next - c.head);
@@ -1075,7 +1078,7 @@ pub fn normalDeleteBack(ed: *Editor, _: KeyChord) void {
     const content = buf.bytes();
     var it = cs.reverseIter(&ed.cursor_pool);
     while (it.next()) |cursor| {
-        const prev = cursor_mod.cursorLeft(content, cursor.head);
+        const prev = crsr.cursorLeft(content, cursor.head);
         if (prev < cursor.head)
             doDelete(ed, win.buffer_id, prev, cursor.head - prev);
     }
@@ -1089,7 +1092,7 @@ pub fn normalDeleteForward(ed: *Editor, _: KeyChord) void {
     const content = buf.bytes();
     var it = cs.reverseIter(&ed.cursor_pool);
     while (it.next()) |cursor| {
-        const next = cursor_mod.cursorRight(content, cursor.head);
+        const next = crsr.cursorRight(content, cursor.head);
         if (next > cursor.head)
             doDelete(ed, win.buffer_id, cursor.head, next - cursor.head);
     }
@@ -1215,7 +1218,7 @@ pub fn insertWordDelete(ed: *Editor, _: KeyChord) void {
     const content = buf.bytes();
     var it = cs.reverseIter(&ed.cursor_pool);
     while (it.next()) |cursor| {
-        const prev = cursor_mod.wordPrev(content, cursor.head);
+        const prev = crsr.wordPrev(content, cursor.head);
         if (prev < cursor.head)
             doDelete(ed, win.buffer_id, prev, cursor.head - prev);
     }
@@ -1253,7 +1256,7 @@ pub fn paletteDown(ed: *Editor, _: KeyChord) void {
     const pat = ed.palette.input.bytes();
     var filtered_count: usize = 0;
     for (ed.palette.picker_items) |item| {
-        if (palette_mod.scoreMatch(pat, item.label).tier != 255)
+        if (palette.scoreMatch(pat, item.label).tier != 255)
             filtered_count += 1;
     }
     if (filtered_count > 0 and ed.palette.picker_selected + 1 < filtered_count)
@@ -1287,13 +1290,13 @@ pub fn paletteInsert(ed: *Editor, chord: KeyChord) void {
 
 const Dir = enum { left, right, up, down };
 
-fn moveDir(ed: *Editor, win: *window_mod.Window, cs: *BufferView, dir: Dir) void {
+fn moveDir(ed: *Editor, win: *wnd.Window, cs: *BufferView, dir: Dir) void {
     const buf = ed.bufOf(win.buffer_id);
     const content = buf.bytes();
     for (cs.iter(&ed.cursor_pool)) |*c| {
         switch (dir) {
             .left, .right => {
-                c.head = if (dir == .left) cursor_mod.cursorLeft(content, c.head) else cursor_mod.cursorRight(content, c.head);
+                c.head = if (dir == .left) crsr.cursorLeft(content, c.head) else crsr.cursorRight(content, c.head);
                 win.preferred_col = null;
             },
             .up, .down => {
@@ -1302,16 +1305,16 @@ fn moveDir(ed: *Editor, win: *window_mod.Window, cs: *BufferView, dir: Dir) void
                 win.preferred_col = col_px;
                 const rows = cs.wrap_rows.items;
                 c.head = if (cs.softwrap)
-                    (if (dir == .up) window_mod.cursorUpWrapped(content, c.head, col_px, win.font_size, rows) else window_mod.cursorDownWrapped(content, c.head, col_px, win.font_size, rows))
+                    (if (dir == .up) wnd.cursorUpWrapped(content, c.head, col_px, win.font_size, rows) else wnd.cursorDownWrapped(content, c.head, col_px, win.font_size, rows))
                 else
-                    (if (dir == .up) cursor_mod.cursorUp(content, c.head, col_px, win.font_size) else cursor_mod.cursorDown(content, c.head, col_px, win.font_size));
+                    (if (dir == .up) crsr.cursorUp(content, c.head, col_px, win.font_size) else crsr.cursorDown(content, c.head, col_px, win.font_size));
             },
         }
         c.anchor = c.head;
     }
 }
 
-fn deleteSelections(ed: *Editor, win: *window_mod.Window, cs: *BufferView) void {
+fn deleteSelections(ed: *Editor, win: *wnd.Window, cs: *BufferView) void {
     var it = cs.reverseIter(&ed.cursor_pool);
     while (it.next()) |cursor| {
         if (cursor.isSelection())
@@ -1319,14 +1322,14 @@ fn deleteSelections(ed: *Editor, win: *window_mod.Window, cs: *BufferView) void 
     }
 }
 
-fn execSneak(ed: *Editor, win: *window_mod.Window, cs: *BufferView, c1: u8, c2: u8, forward: bool) void {
+fn execSneak(ed: *Editor, win: *wnd.Window, cs: *BufferView, c1: u8, c2: u8, forward: bool) void {
     if (c1 == 0) return;
     const content = ed.bufOf(win.buffer_id).bytes();
     for (cs.iter(&ed.cursor_pool)) |*c| {
         const result = if (forward)
-            cursor_mod.sneakForward(content, c.head, c1, c2)
+            crsr.sneakForward(content, c.head, c1, c2)
         else
-            cursor_mod.sneakBackward(content, c.head, c1, c2);
+            crsr.sneakBackward(content, c.head, c1, c2);
         if (result) |pos| {
             c.head = pos;
             c.anchor = pos;

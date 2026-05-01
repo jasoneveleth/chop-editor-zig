@@ -1,6 +1,9 @@
 const std = @import("std");
-const BufferId = @import("buffer.zig").BufferId;
-const Language = @import("highlighter.zig").Language;
+const buffer = @import("buffer.zig");
+const highlighter = @import("highlighter.zig");
+
+const BufferId = buffer.BufferId;
+const Language = highlighter.Language;
 
 pub const Colorscheme = enum { onedark, alabaster };
 
