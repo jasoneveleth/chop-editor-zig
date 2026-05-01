@@ -109,8 +109,10 @@ pub const Editor = struct {
 
         // Main buffer + cursor set + window.
         const buf_id = try editor.createBuffer();
-        editor.getBuffer(buf_id).?.insert(0, FILLER_TEXT) catch {};
-        editor.highlighters.items[buf_id.index].rehighlight(FILLER_TEXT) catch {};
+        const clipboard = platform.readClipboard();
+        const initial_text = if (std.mem.indexOfScalar(u8, clipboard, '\n') != null) clipboard else FILLER_TEXT;
+        editor.getBuffer(buf_id).?.insert(0, initial_text) catch {};
+        editor.highlighters.items[buf_id.index].rehighlight(initial_text) catch {};
         const cs_id = try editor.createBufferView(buf_id);
         try editor.getBufferView(cs_id).?.insert(&editor.cursor_pool, Cursor.init(0));
         editor.focused_window = try editor.createWindow(buf_id, cs_id, width, height);
