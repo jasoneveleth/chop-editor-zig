@@ -281,6 +281,26 @@ pub const Window = struct {
         }
     }
 
+    pub fn ensureCursorVisible(self: *Window, cs: *const BufferView, pool: *const CursorPool) void {
+        if (cs.len == 0 or cs.wrap_rows.items.len == 0) return;
+        const line_height = self.font_size * 1.4;
+        const items = cs.iter(pool);
+
+        // Scroll up if top cursor is above viewport.
+        const top_ri = findRowForPos(cs.wrap_rows.items, items[0].head);
+        const top_y = @as(f32, @floatFromInt(top_ri)) * line_height;
+        if (top_y < self.scroll_y) {
+            self.scroll_y = top_y;
+        }
+
+        // Scroll down if bottom cursor is below viewport.
+        const bot_ri = findRowForPos(cs.wrap_rows.items, items[cs.len - 1].head);
+        const bot_y = @as(f32, @floatFromInt(bot_ri)) * line_height;
+        if (bot_y + line_height > self.scroll_y + self.height) {
+            self.scroll_y = bot_y + line_height - self.height;
+        }
+    }
+
     pub fn onScroll(self: *Window, dx: f32, dy: f32) void {
         _ = dx;
         self.scroll_y = @max(0, self.scroll_y + dy);

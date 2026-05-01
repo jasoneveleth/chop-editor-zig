@@ -727,6 +727,9 @@ pub const Editor = struct {
             }
         }
 
+        if (self.getBufferView(win.buffer_view_id)) |cs| {
+            win.ensureCursorVisible(cs, &self.cursor_pool);
+        }
     }
 
     pub fn onKeyUp(self: *Editor, key: Key, mods: u32) void {
