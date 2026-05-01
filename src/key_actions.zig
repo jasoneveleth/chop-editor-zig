@@ -565,13 +565,10 @@ pub fn addCursorDown(ed: *Editor, _: KeyChord) void {
     const content = buf.bytes();
     const items = cs.iter(&ed.cursor_pool);
     const last = items[cs.len - 1];
-    const ls = grapheme.lineStart(content, last.head);
-    const col_px = win.preferred_col orelse platform.measureText(content[ls..last.head], win.font_size);
+    const rows = cs.wrap_rows.items;
+    const col_px = win.preferred_col orelse platform.measureText(content[visualRowStart(rows, content, last.head)..last.head], win.font_size);
     win.preferred_col = col_px;
-    const new_head = if (cs.softwrap)
-        wnd.cursorDownWrapped(content, last.head, col_px, win.font_size, cs.wrap_rows.items)
-    else
-        crsr.cursorDown(content, last.head, col_px, win.font_size);
+    const new_head = wnd.cursorDownWrapped(content, last.head, col_px, win.font_size, rows);
     if (new_head != last.head)
         cs.insert(&ed.cursor_pool, .{ .head = new_head, .anchor = new_head }) catch {};
 }
@@ -583,13 +580,10 @@ pub fn addCursorUp(ed: *Editor, _: KeyChord) void {
     const buf = ed.bufOf(win.buffer_id);
     const content = buf.bytes();
     const first = cs.iter(&ed.cursor_pool)[0];
-    const ls = grapheme.lineStart(content, first.head);
-    const col_px = win.preferred_col orelse platform.measureText(content[ls..first.head], win.font_size);
+    const rows = cs.wrap_rows.items;
+    const col_px = win.preferred_col orelse platform.measureText(content[visualRowStart(rows, content, first.head)..first.head], win.font_size);
     win.preferred_col = col_px;
-    const new_head = if (cs.softwrap)
-        wnd.cursorUpWrapped(content, first.head, col_px, win.font_size, cs.wrap_rows.items)
-    else
-        crsr.cursorUp(content, first.head, col_px, win.font_size);
+    const new_head = wnd.cursorUpWrapped(content, first.head, col_px, win.font_size, rows);
     if (new_head != first.head)
         cs.insert(&ed.cursor_pool, .{ .head = new_head, .anchor = new_head }) catch {};
 }
@@ -763,9 +757,9 @@ pub fn pendingG(ed: *Editor, chord: KeyChord) void {
     switch (chord.key) {
         'k' => {
             const first_line_end = grapheme.findChars(content, 0, "\n");
+            const rows = cs.wrap_rows.items;
             for (cs.iter(&ed.cursor_pool)) |*c| {
-                const ls = grapheme.lineStart(content, c.head);
-                const col_px = win.preferred_col orelse platform.measureText(content[ls..c.head], win.font_size);
+                const col_px = win.preferred_col orelse platform.measureText(content[visualRowStart(rows, content, c.head)..c.head], win.font_size);
                 win.preferred_col = col_px;
                 c.head = crsr.closestPosToX(content, 0, first_line_end, col_px, win.font_size);
                 c.anchor = c.head;
@@ -776,9 +770,9 @@ pub fn pendingG(ed: *Editor, chord: KeyChord) void {
             for (content, 0..) |ch, i| {
                 if (ch == '\n') last_ls = i + 1;
             }
+            const rows = cs.wrap_rows.items;
             for (cs.iter(&ed.cursor_pool)) |*c| {
-                const ls = grapheme.lineStart(content, c.head);
-                const col_px = win.preferred_col orelse platform.measureText(content[ls..c.head], win.font_size);
+                const col_px = win.preferred_col orelse platform.measureText(content[visualRowStart(rows, content, c.head)..c.head], win.font_size);
                 win.preferred_col = col_px;
                 c.head = crsr.closestPosToX(content, last_ls, content.len, col_px, win.font_size);
                 c.anchor = c.head;
@@ -908,28 +902,20 @@ pub fn pendingQuote(ed: *Editor, chord: KeyChord) void {
     switch (chord.key) {
         'j' => {
             const items = cs.iter(&ed.cursor_pool);
-            const ls = grapheme.lineStart(content, items[0].head);
-            const col_px = win.preferred_col orelse platform.measureText(content[ls..items[0].head], win.font_size);
-            win.preferred_col = col_px;
             const rows = cs.wrap_rows.items;
+            const col_px = win.preferred_col orelse platform.measureText(content[visualRowStart(rows, content, items[0].head)..items[0].head], win.font_size);
+            win.preferred_col = col_px;
             for (items) |*c| {
-                c.head = if (cs.softwrap)
-                    wnd.cursorDownWrapped(content, c.head, col_px, win.font_size, rows)
-                else
-                    crsr.cursorDown(content, c.head, col_px, win.font_size);
+                c.head = wnd.cursorDownWrapped(content, c.head, col_px, win.font_size, rows);
             }
         },
         'k' => {
             const items = cs.iter(&ed.cursor_pool);
-            const ls = grapheme.lineStart(content, items[0].head);
-            const col_px = win.preferred_col orelse platform.measureText(content[ls..items[0].head], win.font_size);
-            win.preferred_col = col_px;
             const rows = cs.wrap_rows.items;
+            const col_px = win.preferred_col orelse platform.measureText(content[visualRowStart(rows, content, items[0].head)..items[0].head], win.font_size);
+            win.preferred_col = col_px;
             for (items) |*c| {
-                c.head = if (cs.softwrap)
-                    wnd.cursorUpWrapped(content, c.head, col_px, win.font_size, rows)
-                else
-                    crsr.cursorUp(content, c.head, col_px, win.font_size);
+                c.head = wnd.cursorUpWrapped(content, c.head, col_px, win.font_size, rows);
             }
         },
         else => {},
@@ -1290,6 +1276,13 @@ pub fn paletteInsert(ed: *Editor, chord: KeyChord) void {
 
 const Dir = enum { left, right, up, down };
 
+/// Returns the byte offset of the visual row start for `pos`.
+/// When wrap_rows is empty (before first render) falls back to the logical line start.
+fn visualRowStart(rows: []const @import("buffer.zig").WrapRow, content: []const u8, pos: usize) usize {
+    if (rows.len == 0) return grapheme.lineStart(content, pos);
+    return rows[wnd.findRowForPos(rows, pos)].start;
+}
+
 fn moveDir(ed: *Editor, win: *wnd.Window, cs: *BufferView, dir: Dir) void {
     const buf = ed.bufOf(win.buffer_id);
     const content = buf.bytes();
@@ -1300,14 +1293,13 @@ fn moveDir(ed: *Editor, win: *wnd.Window, cs: *BufferView, dir: Dir) void {
                 win.preferred_col = null;
             },
             .up, .down => {
-                const ls = grapheme.lineStart(content, c.head);
-                const col_px = win.preferred_col orelse platform.measureText(content[ls..c.head], win.font_size);
-                win.preferred_col = col_px;
                 const rows = cs.wrap_rows.items;
-                c.head = if (cs.softwrap)
-                    (if (dir == .up) wnd.cursorUpWrapped(content, c.head, col_px, win.font_size, rows) else wnd.cursorDownWrapped(content, c.head, col_px, win.font_size, rows))
+                const col_px = win.preferred_col orelse platform.measureText(content[visualRowStart(rows, content, c.head)..c.head], win.font_size);
+                win.preferred_col = col_px;
+                c.head = if (dir == .up)
+                    wnd.cursorUpWrapped(content, c.head, col_px, win.font_size, rows)
                 else
-                    (if (dir == .up) crsr.cursorUp(content, c.head, col_px, win.font_size) else crsr.cursorDown(content, c.head, col_px, win.font_size));
+                    wnd.cursorDownWrapped(content, c.head, col_px, win.font_size, rows);
             },
         }
         c.anchor = c.head;

@@ -57,7 +57,7 @@ fn tagStyle(tag: highlighter.Tag, scheme: Colorscheme) TagStyle {
     };
 }
 
-fn findRowForPos(rows: []const WrapRow, pos: usize) usize {
+pub fn findRowForPos(rows: []const WrapRow, pos: usize) usize {
     var best: usize = 0;
     for (rows, 0..) |row, i| {
         if (pos >= row.start) best = i else break;
